@@ -1,0 +1,243 @@
+# ============================================
+# 환경 변수 및 민감 정보
+# ============================================
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+
+# API 키, 비밀번호, 토큰 등
+*.key
+*.pem
+*.p12
+secrets/
+credentials/
+
+# ============================================
+# Python 관련
+# ============================================
+# 바이트 컴파일 파일
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 가상 환경
+venv/
+env/
+ENV/
+.venv
+.pyenv
+
+# 배포 관련
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ============================================
+# 데이터 파일 (용량 큰 파일, 개인정보)
+# ============================================
+# 법률 문서 데이터 (대용량)
+data/
+data/legal_docs/
+*.jsonl
+*.csv
+*.xlsx
+*.xls
+
+# 업로드된 파일
+uploads/
+temp/
+tmp/
+
+# 데이터베이스 파일
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================
+# 로그 파일
+# ============================================
+logs/
+*.log
+log/
+*.log.*
+
+# ============================================
+# IDE 및 에디터 설정
+# ============================================
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ============================================
+# OS 관련
+# ============================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+
+# ============================================
+# Docker 관련
+# ============================================
+# Docker 볼륨 데이터는 제외하지만,
+# docker-compose.yml은 포함
+# (볼륨 데이터는 로컬에만 유지)
+
+# ============================================
+# Qdrant 데이터
+# ============================================
+# Qdrant 벡터 DB 데이터 (Docker 볼륨)
+qdrant_storage/
+qdrant_data/
+.qdrant/
+
+# ============================================
+# 빌드 및 캐시
+# ============================================
+# Python 캐시
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# ============================================
+# 테스트 관련 (선택적)
+# ============================================
+# 테스트 결과물
+.pytest_cache/
+test-results/
+test-reports/
+
+# 테스트용 임시 파일
+tests/temp/
+tests/uploads/
+
+# ============================================
+# 문서 빌드 결과물
+# ============================================
+# Sphinx documentation
+docs/_build/
+docs/.doctrees/
+
+# MkDocs
+site/
+
+# ============================================
+# 기타
+# ============================================
+# 백업 파일
+*.bak
+*.backup
+*.old
+*.orig
+
+# 압축 파일 (소스는 제외)
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# 임시 파일
+*.tmp
+*.temp
+.cache/
+
+# 프로파일링 결과
+*.prof
+*.lprof
+
+# 모델 가중치 파일 (대용량)
+*.h5
+*.pkl
+*.pickle
+*.model
+models/
+
+# ============================================
+# 프로젝트 특화 (A-LAW)
+# ============================================
+# OCR 처리 결과 (임시)
+ocr_results/
+extracted_texts/
+
+# 계약서 분석 결과 (캐시)
+analysis_cache/
+contract_cache/
+
+# 사용자 업로드 파일
+user_uploads/
+contract_uploads/
+
+# ============================================
+# md 파일
+# ============================================
+*.md
+
+# ============================================
+# bat 파일
+# ============================================
+*.bat
