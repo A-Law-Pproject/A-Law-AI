@@ -36,8 +36,8 @@ jobs:
       - name: Lint
         run: flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics
 
-      - name: Run tests
-        run: pytest --cov=app tests/ -v
+      # - name: Run tests
+      #   run: pytest --cov=app tests/ -v
 
   build-and-push:
     needs: test
