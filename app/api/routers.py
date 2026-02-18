@@ -2,21 +2,33 @@
 API 라우터 등록
 """
 from fastapi import APIRouter
-from app.api.endpoints import contract, rag
+from app.api.endpoints import contract, ocr, rag, contract_analysis
 
-# 메인 API 라우터
 api_router = APIRouter()
 
-# 계약서 분석 엔드포인트 등록
+# 계약서 분석
 api_router.include_router(
     contract.router,
     prefix="/contracts",
-    tags=["contracts"]
+    tags=["계약서 분석"],
 )
 
-# RAG 관리 엔드포인트 등록
+# ocr
+api_router.include_router(
+    ocr.router,
+    prefix="/contracts",
+    tags=["계약서 OCR"],
+)
+# RAG 관리
 api_router.include_router(
     rag.router,
     prefix="/rag",
-    tags=["rag"]
+    tags=["RAG 관리"],
+)
+
+# 비동기 분석 (Spring Boot 연동)
+api_router.include_router(
+    contract_analysis.router,
+    prefix="/analysis",
+    tags=["비동기 분석"],
 )
