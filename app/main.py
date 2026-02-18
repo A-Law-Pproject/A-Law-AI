@@ -1,25 +1,44 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from app.api.routers import api_router
+from app.services.rabbitmq_consumer import start_consumer, stop_consumer
+from loguru import logger
 
 
-# 스레드 풀 (LangChain 동기 호출 처리)
 executor = ThreadPoolExecutor(max_workers=4)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI Lifespan - RabbitMQ Consumer 시작/종료"""
+    logger.info("Starting RabbitMQ Consumer...")
+    try:
+        await start_consumer()
+        logger.info("RabbitMQ Consumer started successfully")
+    except Exception as e:
+        logger.warning(f"RabbitMQ Consumer failed to start: {e}")
+        logger.warning("The API will still work, but message queue processing is disabled")
+
+    yield
+
+    logger.info("Stopping RabbitMQ Consumer...")
+    await stop_consumer()
+    logger.info("RabbitMQ Consumer stopped")
 
 
 app = FastAPI(
     title="A-LAW Contract Analysis AI",
-    description="법률 문서 분석 및 위험도 평가 시스템",
-    version="1.0.0"
+    description="임대차 계약서 AI 분석 및 위험도 평가 시스템",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
+    allow_credentials=True,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,24 +48,13 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api")
 
 
-# 헬스체크 엔드포인트
-@app.get("/health", tags=["Health"])
+@app.get("/health", tags=["시스템"])
 async def health_check():
     """서버 헬스체크"""
     return {
         "status": "healthy",
         "service": "A-LAW FastAPI",
         "version": "1.0.0"
-    }
-
-
-@app.get("/", tags=["Root"])
-async def root():
-    """루트 엔드포인트"""
-    return {
-        "message": "A-LAW Contract Analysis API",
-        "docs": "/docs",
-        "health": "/health"
     }
 
 

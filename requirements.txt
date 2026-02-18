@@ -1,18 +1,17 @@
 # Core Framework
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-python-multipart>=0.0.17
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.17
 
-# LangChain & LangGraph (최신 버전)
+# LangChain & LangGraph (호환 버전)
 langchain>=1.0.0
-langchain-core>=0.3.0
-langchain-openai>=0.3.0
+langchain-core>=1.0.0
+langchain-openai>=1.0.0
 langchain-community>=0.3.0
 langgraph>=0.2.0
-langsmith>=0.3.0
 
 # Vector Database (Qdrant)
-qdrant-client>=1.12.0
+qdrant-client>=1.10.0
 
 # OpenAI
 openai>=1.50.0
@@ -21,20 +20,43 @@ openai>=1.50.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 
-# OCR & Image Processing (선택적 - 필요시 별도 설치)
-# pip install paddleocr opencv-python
-Pillow>=11.0.0
+# OCR & Image Processing (설치 순서 중요!)
+# 1. numpy 먼저 설치
+numpy==1.26.4
+# 2. paddlepaddle, paddleocr 설치
+paddlepaddle==2.6.2
+paddleocr==2.7.3
+# 3. opencv 설치
+opencv-python==4.6.0.66
+opencv-contrib-python==4.6.0.66
+# 4. 기타
+pymupdf>=1.24.0
+Pillow>=10.0.0
 
 # Korean NLP
 kiwipiepy>=0.18.0
 
+# Message Queue - Celery + RabbitMQ
+celery==5.3.6
+aio-pika>=9.4.0  # Async RabbitMQ client
+# kombu와 amqp는 celery가 자동으로 관리
+
+# Cache - Redis
+redis>=5.0.0
+
+# Database - PostgreSQL
+psycopg2-binary>=2.9.9
+
+# AWS S3 (선택)
+boto3>=1.34.0
+
 # Utilities
 python-dotenv>=1.0.0
 httpx>=0.27.0
-tenacity>=9.0.0
+tenacity>=8.1.0
 
 # Testing
-pytest>=8.3.0
+pytest>=8.0.0
 pytest-asyncio>=0.24.0
 
 # Monitoring & Logging
