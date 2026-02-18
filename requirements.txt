@@ -20,26 +20,18 @@ openai>=1.50.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 
-# OCR & Image Processing (설치 순서 중요!)
-# 1. numpy 먼저 설치
-numpy==1.26.4
-# 2. paddlepaddle, paddleocr 설치
-paddlepaddle==2.6.2
-paddleocr==2.7.3
-# 3. opencv 설치
-opencv-python==4.6.0.66
-opencv-contrib-python==4.6.0.66
-# 4. 기타
+# OCR & Image Processing
+numpy>=1.26.0
+opencv-python-headless>=4.8.0
 pymupdf>=1.24.0
 Pillow>=10.0.0
 
 # Korean NLP
-kiwipiepy>=0.18.0
+# kiwipiepy>=0.18.0
 
 # Message Queue - Celery + RabbitMQ
 celery==5.3.6
 aio-pika>=9.4.0  # Async RabbitMQ client
-# kombu와 amqp는 celery가 자동으로 관리
 
 # Cache - Redis
 redis>=5.0.0
