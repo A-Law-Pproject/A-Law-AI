@@ -971,4 +971,3 @@ if __name__ == "__main__":
     print("  from ocr_engine.ocr_processor import create_ocr_processor")
     print("  processor = create_ocr_processor('ensemble')")
     print("  result = processor.process(image)")
-"""

@@ -1467,4 +1467,4 @@ if __name__ == "__main__":
         print("  model = ContractOCRModel()")
         print("  result = model.process('계약서.png')")
         print("  print(result.to_frontend_format())")
-"""
+

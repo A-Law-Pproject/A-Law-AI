@@ -532,4 +532,3 @@ if __name__ == "__main__":
         print(f"교정: {result['corrected']}")
         print(f"검증: {result['validation']}")
         print("-" * 50)
-"""
