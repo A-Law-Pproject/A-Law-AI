@@ -355,116 +355,116 @@ def health_check():
 # 병렬 처리 태스크 (AI 요약 + Risk 분석)
 # ===========================================
 
-@celery_app.task(
-    name="tasks.analyze_contract_parallel",
-    bind=True,
-    max_retries=3,
-    default_retry_delay=30,
-    acks_late=True
-)
-def analyze_contract_parallel(self, message: dict):
-    """
-    계약서 병렬 분석 태스크 (Spring Boot 연동용)
+# @celery_app.task(
+#     name="tasks.analyze_contract_parallel",
+#     bind=True,
+#     max_retries=3,
+#     default_retry_delay=30,
+#     acks_late=True
+# )
+# def analyze_contract_parallel(self, message: dict):
+#     """
+#     계약서 병렬 분석 태스크 (Spring Boot 연동용)
 
-    병렬 처리:
-        - AI 요약 (5-10초)
-        - Risk 분석 (3-7초)
+#     병렬 처리:
+#         - AI 요약 (5-10초)
+#         - Risk 분석 (3-7초)
 
-    Args:
-        message: ContractAnalysisRequest JSON (Spring Boot에서 발행)
+#     Args:
+#         message: ContractAnalysisRequest JSON (Spring Boot에서 발행)
 
-    Returns:
-        분석 결과 dict
-    """
-    task_id = message.get('taskId', 'unknown')
-    logger.info(f"[Parallel] Received analysis task: {task_id}")
+#     Returns:
+#         분석 결과 dict
+#     """
+#     task_id = message.get('taskId', 'unknown')
+#     logger.info(f"[Parallel] Received analysis task: {task_id}")
 
-    try:
-        # 메시지 파싱
-        request = ContractAnalysisRequest(**message)
+#     try:
+#         # 메시지 파싱
+#         request = ContractAnalysisRequest(**message)
 
-        # 상태 업데이트
-        update_status_redis(task_id, "PROCESSING")
+#         # 상태 업데이트
+#         update_status_redis(task_id, "PROCESSING")
 
-        # 비동기 분석 실행
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                _process_parallel_analysis(request)
-            )
-        finally:
-            loop.close()
+#         # 비동기 분석 실행
+#         loop = asyncio.new_event_loop()
+#         asyncio.set_event_loop(loop)
+#         try:
+#             result = loop.run_until_complete(
+#                 _process_parallel_analysis(request)
+#             )
+#         finally:
+#             loop.close()
 
-        # 결과 발행 (ai.result.queue로)
-        result_publisher.publish(result)
+#         # 결과 발행 (ai.result.queue로)
+#         result_publisher.publish(result)
 
-        # Redis/DB 상태 업데이트
-        update_status_redis(task_id, "COMPLETED")
-        save_result_redis(task_id, result.model_dump(by_alias=True))
+#         # Redis/DB 상태 업데이트
+#         update_status_redis(task_id, "COMPLETED")
+#         save_result_redis(task_id, result.model_dump(by_alias=True))
 
-        logger.info(f"[Parallel] Analysis completed: {task_id}")
-        return result.model_dump(by_alias=True)
+#         logger.info(f"[Parallel] Analysis completed: {task_id}")
+#         return result.model_dump(by_alias=True)
 
-    except Exception as e:
-        logger.error(f"[Parallel] Task failed: {e}")
+#     except Exception as e:
+#         logger.error(f"[Parallel] Task failed: {e}")
 
-        # 실패 결과 발행
-        error_result = ContractAnalysisResult(
-            task_id=task_id,
-            status=AnalysisStatus.FAILED,
-            error_message=str(e)
-        )
-        result_publisher.publish(error_result)
-        update_status_redis(task_id, "FAILED", str(e))
+#         # 실패 결과 발행
+#         error_result = ContractAnalysisResult(
+#             task_id=task_id,
+#             status=AnalysisStatus.FAILED,
+#             error_message=str(e)
+#         )
+#         result_publisher.publish(error_result)
+#         update_status_redis(task_id, "FAILED", str(e))
 
-        raise self.retry(exc=e)
+#         raise self.retry(exc=e)
 
 
 
-def _convert_risk_assessments(assessments: list) -> RiskAnalysisResult:
-    """ClauseRiskAssessment 리스트를 RiskAnalysisResult로 변환"""
-    if not assessments:
-        return RiskAnalysisResult(
-            total_clauses=0,
-            clause_results=[]
-        )
+# def _convert_risk_assessments(assessments: list) -> RiskAnalysisResult:
+#     """ClauseRiskAssessment 리스트를 RiskAnalysisResult로 변환"""
+#     if not assessments:
+#         return RiskAnalysisResult(
+#             total_clauses=0,
+#             clause_results=[]
+#         )
 
-    clause_results = []
-    risk_count = 0
-    caution_count = 0
-    safety_count = 0
+#     clause_results = []
+#     risk_count = 0
+#     caution_count = 0
+#     safety_count = 0
 
-    for assessment in assessments:
-        if assessment.risk_level == "Risk":
-            risk_count += 1
-        elif assessment.risk_level == "Caution":
-            caution_count += 1
-        else:
-            safety_count += 1
+#     for assessment in assessments:
+#         if assessment.risk_level == "Risk":
+#             risk_count += 1
+#         elif assessment.risk_level == "Caution":
+#             caution_count += 1
+#         else:
+#             safety_count += 1
 
-        # Reasoning 요약 (처음 2개 step만)
-        reasoning_summary = " → ".join([
-            step.thought for step in assessment.reasoning[:2]
-        ]) if assessment.reasoning else ""
+#         # Reasoning 요약 (처음 2개 step만)
+#         reasoning_summary = " → ".join([
+#             step.thought for step in assessment.reasoning[:2]
+#         ]) if assessment.reasoning else ""
 
-        clause_results.append(ClauseRiskResult(
-            clause_title=assessment.clause_title,
-            clause_content=assessment.clause_content,
-            risk_level=assessment.risk_level,
-            legal_reference=assessment.legal_reference,
-            recommendation=assessment.recommendation,
-            reasoning_summary=reasoning_summary
-        ))
+#         clause_results.append(ClauseRiskResult(
+#             clause_title=assessment.clause_title,
+#             clause_content=assessment.clause_content,
+#             risk_level=assessment.risk_level,
+#             legal_reference=assessment.legal_reference,
+#             recommendation=assessment.recommendation,
+#             reasoning_summary=reasoning_summary
+#         ))
 
-    total = len(assessments)
-    risk_percentage = round(risk_count / total * 100, 1) if total > 0 else 0
+#     total = len(assessments)
+#     risk_percentage = round(risk_count / total * 100, 1) if total > 0 else 0
 
-    return RiskAnalysisResult(
-        total_clauses=total,
-        risk_count=risk_count,
-        caution_count=caution_count,
-        safety_count=safety_count,
-        risk_percentage=risk_percentage,
-        clause_results=clause_results
-    )
+#     return RiskAnalysisResult(
+#         total_clauses=total,
+#         risk_count=risk_count,
+#         caution_count=caution_count,
+#         safety_count=safety_count,
+#         risk_percentage=risk_percentage,
+#         clause_results=clause_results
+#     )
