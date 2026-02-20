@@ -29,9 +29,6 @@ class Settings(BaseSettings):
 
     # Legal Documents Path
     LEGAL_DOCS_PATH: str
-
-    # General Settings
-    DEBUG: bool
     
     # RabbitMQ (Spring Boot 인프라 연결)
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
