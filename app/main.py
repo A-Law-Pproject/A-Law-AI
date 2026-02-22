@@ -45,7 +45,7 @@ app.add_middleware(
 )
 
 # API 라우터 등록
-app.include_router(api_router, prefix="/api")
+app.include_router(api_router, prefix="/ai")
 
 
 @app.get("/health", tags=["시스템"])
