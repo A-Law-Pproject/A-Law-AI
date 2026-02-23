@@ -54,5 +54,8 @@ class Settings(BaseSettings):
     AWS_REGION: str = "ap-northeast-2"
     AWS_S3_BUCKET: str = "alaw-contracts"
 
+    # 일반 설정
+    DEBUG: bool = False
+
 
 settings = Settings()

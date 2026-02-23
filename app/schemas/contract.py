@@ -132,11 +132,18 @@ class ClauseAnalysis(BaseModel):
     legal_reference: Optional[str] = Field(None, description="관련 법령")
 
 
+class RiskSummary(BaseModel):
+    """위험도 요약"""
+    Risk: int = Field(default=0, description="고위험 조항 수")
+    Caution: int = Field(default=0, description="주의 조항 수")
+    Safety: int = Field(default=0, description="안전 조항 수")
+
+
 class AnalysisResult(BaseModel):
     """전체 분석 결과"""
-    contract_id: str = Field(..., description="계약서 ID")
-    total_clauses: int = Field(..., description="총 조항 수")
-    risk_summary: Dict[str, int] = Field(..., description="위험도 요약")
+    contract_id: str = Field(default="", description="계약서 ID")
+    total_clauses: int = Field(default=0, description="총 조항 수")
+    risk_summary: RiskSummary = Field(default_factory=RiskSummary, description="위험도 요약")
     clauses: List[ClauseAnalysis] = Field(default_factory=list, description="조항별 분석")
-    overall_risk_score: float = Field(..., description="전체 위험도 점수")
+    overall_risk_score: float = Field(default=0.0, description="전체 위험도 점수")
     recommendations: List[str] = Field(default_factory=list, description="권고사항")
