@@ -1,7 +1,7 @@
 """
 계약서 분석 관련 스키마
 """
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator, AliasChoices
 from typing import List, Optional, Dict, Any
 
 
@@ -69,18 +69,16 @@ class TermRequest(BaseModel):
         description="해설할 용어",
         examples=["확정일자", "대항력", "우선변제권"]
     )
-    context: str = Field(
-        default="",
-        description="문맥",
-        examples=["임대차 계약서", "주택임대차보호법"]
-    )
-    surrounding_text: str = Field(
-        default="",
-        description="주변 텍스트",
-        examples=["임차인은 확정일자를 받아야 우선변제권을 행사할 수 있다."]
-    )
+
+
+    @model_validator(mode="after")
+    def map_original_sentence(self) -> "TermRequest":
+        if not self.surrounding_text and self.original_sentence:
+            self.surrounding_text = self.original_sentence
+        return self
 
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "examples": [
                 {
@@ -101,8 +99,9 @@ class TermRequest(BaseModel):
 class TermExplanation(BaseModel):
     """법률 용어 해설"""
     term: str = Field(..., description="용어")
-    simple_explanation: str = Field(..., description="쉬운 설명")
-    legal_definition: str = Field(..., description="법률적 정의")
+    easy_explanation: str = Field(..., description="쉬운 설명")
+    original_sentence: str = Field(default="", description="원문 문장")
+    legal_definition: str = Field(default="", description="법률적 정의")
     examples: List[str] = Field(default_factory=list, description="예시")
 
     model_config = ConfigDict(
@@ -110,7 +109,8 @@ class TermExplanation(BaseModel):
             "examples": [
                 {
                     "term": "확정일자",
-                    "simple_explanation": "보증금을 우선적으로 돌려받을 수 있는 권리를 증명하는 도장입니다.",
+                    "easy_explanation": "보증금을 우선적으로 돌려받을 수 있는 권리를 증명하는 도장입니다.",
+                    "original_sentence": "임차인은 확정일자를 받아야 우선변제권을 행사할 수 있다.",
                     "legal_definition": "주택임대차보호법상 대항력과 우선변제권을 갖추기 위한 요건으로, 임대차 계약서에 관할 관청이 날인하는 것을 말합니다.",
                     "examples": [
                         "전입신고 + 확정일자 → 우선변제권 획득",

@@ -30,16 +30,17 @@ class RiskLevel(str, Enum):
 class ContractAnalysisRequest(BaseModel):
     """
     Spring Boot에서 발행하는 분석 요청 메시지
-    Queue: contract.analysis.queue
+    Queue: contract-analysis-queue
+
+    Spring Boot @JsonProperty("snake_case") 기준
     """
-    task_id: str = Field(..., alias="taskId", description="작업 ID (UUID)")
-    s3_key: str = Field(..., alias="s3Key", description="S3에 저장된 계약서 파일 키")
-    user_id: int = Field(..., alias="userId", description="요청 사용자 ID")
-    contract_text: str = Field(..., alias="contractText", description="OCR 추출 텍스트")
-    created_at: Optional[datetime] = Field(default=None, alias="createdAt")
+    job_id: str = Field(..., alias="job_id")
+    contract_id: int = Field(..., alias="contract_id")
+    s3_key: str = Field(..., alias="s3_key")
+    user_id: int = Field(..., alias="user_id")
 
     class Config:
-        populate_by_name = True  # alias와 field name 둘 다 허용
+        populate_by_name = True
 
 
 # ========================
@@ -90,7 +91,8 @@ class ContractAnalysisResult(BaseModel):
     FastAPI에서 발행하는 분석 결과 메시지
     Exchange: contract.analysis.result
     """
-    task_id: str = Field(..., alias="taskId")
+    job_id: str = Field(..., alias="jobId")
+    contract_id: int = Field(..., alias="contractId")
     status: AnalysisStatus = Field(default=AnalysisStatus.COMPLETED)
 
     # AI 요약 결과
@@ -111,5 +113,5 @@ class ContractAnalysisResult(BaseModel):
         }
 
     def to_rabbitmq_message(self) -> Dict[str, Any]:
-        """RabbitMQ 발행용 JSON 변환 (camelCase)"""
-        return self.model_dump(by_alias=True, exclude_none=True)
+        """RabbitMQ 발행용 JSON 변환 (camelCase) - mode='json'으로 datetime 자동 직렬화"""
+        return self.model_dump(by_alias=True, exclude_none=True, mode='json')
