@@ -9,9 +9,7 @@ GPT-4o를 사용하여 계약서를 분석하고 결과를 저장합니다.
     - AI 요약 (5-10초)
     - Risk 분석 (3-7초)
 """
-import asyncio
 import json
-import time
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -24,6 +22,10 @@ from loguru import logger
 
 from app.core.celery_config import celery_app
 from app.core.config import settings
+from app.core.dependencies import get_qdrant_client, get_embeddings, get_llm
+from app.rag.chunking.legal_chunker import create_legal_splitter
+from app.rag.retriever.multi_retriever import search_collection
+from app.rag.chain.chain import detect_risk
 from app.schemas.contract_analysis_dto import (
     ContractAnalysisRequest,
     ContractAnalysisResult,
@@ -162,6 +164,87 @@ def save_result_redis(job_id: str, result: Dict):
 
 
 # ===========================================
+# RAG 독소조항 탐지 헬퍼
+# ===========================================
+
+def _rag_detect_risky_clauses(
+    ocr_text: str,
+    risk_delta_threshold: float = 0.1,
+    max_clauses: int = 5,
+) -> list[dict]:
+    """LegalChunker로 조항 분할 후 RAG 기반 독소조항 스크리닝 + LLM 분석.
+
+    1단계: 모든 조항에 대해 임베딩 + Qdrant 검색만 수행 (LLM 없음)
+    2단계: risk_delta(불법 유사도 - 일반 유사도) > threshold인 조항만 LLM 분석
+
+    Args:
+        ocr_text: OCR로 추출된 전체 계약서 텍스트.
+        risk_delta_threshold: LLM 분석 대상 임계값.
+        max_clauses: 비용 제한용 최대 LLM 분석 조항 수.
+
+    Returns:
+        [{"clause_text", "risk_delta", "analysis", "illegal_similarity", "normal_similarity"}, ...]
+    """
+    qdrant = get_qdrant_client()
+    embeddings = get_embeddings()
+    llm = get_llm()
+
+    # 1. 조항 단위 분할
+    splitter = create_legal_splitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_text(ocr_text)
+    if not chunks:
+        return []
+
+    # 2. 스크리닝: 임베딩 1회 + Qdrant 검색으로 risk_delta 계산
+    risky_chunks: list[tuple[str, float]] = []
+    for chunk in chunks:
+        try:
+            query_vector = embeddings.embed_query(chunk)
+            illegal_results = search_collection(
+                qdrant, embeddings, chunk, "special_clauses_illegal",
+                k=2, query_vector=query_vector,
+            )
+            normal_results = search_collection(
+                qdrant, embeddings, chunk, "special_clauses_normal",
+                k=2, query_vector=query_vector,
+            )
+            illegal_score = max(
+                (d.metadata.get("score", 0) for d in illegal_results), default=0.0
+            )
+            normal_score = max(
+                (d.metadata.get("score", 0) for d in normal_results), default=0.0
+            )
+            risk_delta = illegal_score - normal_score
+            if risk_delta > risk_delta_threshold:
+                risky_chunks.append((chunk, risk_delta))
+        except Exception as e:
+            logger.warning(f"RAG 스크리닝 실패 (chunk 건너뜀): {e}")
+
+    if not risky_chunks:
+        return []
+
+    # 3. risk_delta 내림차순 정렬 후 상위 max_clauses만 LLM 분석
+    risky_chunks.sort(key=lambda x: x[1], reverse=True)
+    risky_chunks = risky_chunks[:max_clauses]
+
+    rag_results: list[dict] = []
+    for chunk_text, delta in risky_chunks:
+        try:
+            result = detect_risk(chunk_text, qdrant, embeddings, llm)
+            rag_results.append({
+                "clauseText": chunk_text,
+                "riskDelta": round(delta, 4),
+                "analysis": result.get("analysis", ""),
+                "illegalSimilarity": round(result.get("illegal_similarity", 0), 4),
+                "normalSimilarity": round(result.get("normal_similarity", 0), 4),
+            })
+        except Exception as e:
+            logger.warning(f"RAG detect_risk LLM 분석 실패: {e}")
+
+    return rag_results
+
+
+# ===========================================
 # Celery 태스크
 # ===========================================
 
@@ -244,25 +327,34 @@ def analyze_contract(
             analysis_data.get("illegalClauses", [])
         )
 
-        # 5. 최종 결과 구성
+        # 5. RAG 기반 독소조항 탐지 (조항 분할 → 스크리닝 → LLM)
+        try:
+            rag_risky_clauses = _rag_detect_risky_clauses(ocr_text)
+            logger.info(f"RAG 독소조항 탐지 완료: {len(rag_risky_clauses)}개 발견")
+        except Exception as e:
+            logger.warning(f"RAG 독소조항 탐지 실패 (GPT-4o 결과만 사용): {e}")
+            rag_risky_clauses = []
+
+        # 6. 최종 결과 구성
         result = {
             "jobId": job_id,
             "contractId": contract_id,
             "fraudRisks": analysis_data.get("fraudRisks", []),
             "missingClauses": analysis_data.get("missingClauses", []),
             "illegalClauses": analysis_data.get("illegalClauses", []),
+            "ragRiskyClauses": rag_risky_clauses,
             "summary": analysis_data.get("summary", ""),
             "recommendations": analysis_data.get("recommendations", []),
             "riskScore": risk_score,
             "completedAt": datetime.now().isoformat()
         }
 
-        # 6. 결과 저장
+        # 7. 결과 저장
         save_result_redis(job_id, result)
         update_status_redis(job_id, "COMPLETED")
         update_job_status_db(job_id, "COMPLETED", result=result)
 
-        # 7. 콜백 호출 (있는 경우)
+        # 8. 콜백 호출 (있는 경우)
         if callback_url:
             send_callback(callback_url, result)
 
