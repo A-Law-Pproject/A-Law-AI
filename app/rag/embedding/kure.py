@@ -1,6 +1,8 @@
 from sentence_transformers import SentenceTransformer
 from loguru import logger
 
+from app.monitoring.metrics import EMBEDDING_LATENCY
+
 
 class KUREEmbeddings:
     """KURE-v1 한국어 임베딩 모델 (LangChain 호환 인터페이스)"""
@@ -11,10 +13,12 @@ class KUREEmbeddings:
         logger.info(f"KUREEmbeddings initialized: {model_name} (dim={self.dimension})")
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self.model.encode(texts, normalize_embeddings=True).tolist()
+        with EMBEDDING_LATENCY.time():
+            return self.model.encode(texts, normalize_embeddings=True).tolist()
 
     def embed_query(self, text: str) -> list[float]:
-        return self.model.encode(text, normalize_embeddings=True).tolist()
+        with EMBEDDING_LATENCY.time():
+            return self.model.encode(text, normalize_embeddings=True).tolist()
 
 
 _embeddings_instance: KUREEmbeddings | None = None

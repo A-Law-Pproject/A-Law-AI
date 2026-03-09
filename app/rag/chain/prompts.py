@@ -1,4 +1,4 @@
-from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 
 CONTRACT_QA_PROMPT = PromptTemplate(
     input_variables=["context", "question"],
@@ -17,6 +17,50 @@ CONTRACT_QA_PROMPT = PromptTemplate(
 3. 사회초년생도 이해하기 쉽게 설명하세요
 
 답변:""",
+)
+
+# ── 챗봇 (대화 이력 포함) ──────────────────────────────────────────────────────
+CHAT_SYSTEM_PROMPT = """당신은 한국 임대차 계약 전문 AI 어시스턴트입니다.
+사용자가 계약서나 법률에 관해 궁금한 점을 대화 형식으로 물어볼 수 있습니다.
+
+아래 법률 문서와 판례를 참고하여 답변하세요.
+
+[참고 문서]
+{context}
+
+답변 원칙:
+1. 모르는 내용은 솔직하게 "확인이 필요합니다"라고 말하세요.
+2. 관련 법조항(주택임대차보호법 등)이 있으면 조문 번호와 함께 인용하세요.
+3. 독소조항 위험이 있으면 ⚠️ 표시와 함께 명확히 경고하세요.
+4. 사회초년생도 이해할 수 있도록 쉽게 설명하세요.
+5. 이전 대화 내용을 참고하여 자연스럽게 이어서 답변하세요."""
+
+CHAT_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", CHAT_SYSTEM_PROMPT),
+    MessagesPlaceholder(variable_name="history"),
+    ("human", "{question}"),
+])
+
+TERM_EXPLANATION_PROMPT = PromptTemplate(
+    input_variables=["term", "context", "surrounding_text", "law_context"],
+    template="""당신은 한국 임대차 계약 법률 전문가입니다.
+아래 법률 문서를 바탕으로 용어를 설명하세요.
+
+법률 용어: {term}
+문맥: {context}
+관련 문장: {surrounding_text}
+
+=== 관련 법률 문서 ===
+{law_context}
+
+다음 JSON 형식으로만 답변하세요 (한국어로):
+{{
+  "simple_explanation": "사회초년생도 이해할 수 있는 한 문장 쉬운 설명",
+  "legal_definition": "법조문 기반 법률적 정의",
+  "examples": ["실생활 예시 1", "실생활 예시 2", "실생활 예시 3"]
+}}
+
+JSON만 출력하고 다른 텍스트는 포함하지 마세요.""",
 )
 
 RISK_PROMPT = PromptTemplate(
