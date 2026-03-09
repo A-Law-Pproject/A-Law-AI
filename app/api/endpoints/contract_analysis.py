@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 import redis
+import redis.asyncio as aioredis
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException
 from loguru import logger
@@ -21,8 +22,8 @@ from app.worker.worker import analyze_contract
 
 router = APIRouter()
 
-# Redis 클라이언트 (상태 조회용)
-redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+# Redis 클라이언트 (상태 조회용) - async
+redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
 # ===========================================
@@ -87,7 +88,7 @@ async def submit_analysis(request: AnalysisSubmitRequest):
             "status": "QUEUED",
             "updatedAt": datetime.now().isoformat()
         }
-        redis_client.setex(
+        await redis_client.setex(
             f"status:{job_id}",
             3600,  # 1시간 TTL
             json.dumps(status_data)
@@ -114,7 +115,7 @@ async def submit_analysis(request: AnalysisSubmitRequest):
             status="QUEUED"
         )
 
-    except redis.ConnectionError as e:
+    except (redis.ConnectionError, aioredis.ConnectionError) as e:
         logger.error(f"Redis connection error: {e}")
         raise HTTPException(503, "Redis 연결 실패")
     except Exception as e:
@@ -131,7 +132,7 @@ async def get_analysis_status(job_id: str):
     """
     try:
         # 1. Redis에서 상태 조회 (우선)
-        status_raw = redis_client.get(f"status:{job_id}")
+        status_raw = await redis_client.get(f"status:{job_id}")
         if status_raw:
             status_data = json.loads(status_raw)
             return AnalysisStatusResponse(
@@ -161,7 +162,7 @@ async def get_analysis_status(job_id: str):
             error=error
         )
 
-    except redis.ConnectionError as e:
+    except (redis.ConnectionError, aioredis.ConnectionError) as e:
         logger.error(f"Redis connection error: {e}")
         raise HTTPException(503, "Redis 연결 실패")
 
@@ -175,7 +176,7 @@ async def get_analysis_result(job_id: str):
     """
     try:
         # 1. Redis에서 결과 조회 (캐시)
-        result_raw = redis_client.get(f"result:{job_id}")
+        result_raw = await redis_client.get(f"result:{job_id}")
         if result_raw:
             result = json.loads(result_raw)
             return AnalysisResultResponse(
@@ -211,7 +212,7 @@ async def get_analysis_result(job_id: str):
         else:
             raise HTTPException(400, f"분석 미완료. 현재 상태: {task_result.status}")
 
-    except redis.ConnectionError as e:
+    except (redis.ConnectionError, aioredis.ConnectionError) as e:
         logger.error(f"Redis connection error: {e}")
         raise HTTPException(503, "Redis 연결 실패")
 
@@ -236,7 +237,7 @@ async def cancel_analysis(job_id: str):
                 "status": "CANCELLED",
                 "updatedAt": datetime.now().isoformat()
             }
-            redis_client.setex(
+            await redis_client.setex(
                 f"status:{job_id}",
                 3600,
                 json.dumps(status_data)
@@ -250,6 +251,6 @@ async def cancel_analysis(job_id: str):
                 f"취소 불가. 현재 상태: {task_result.status}"
             )
 
-    except redis.ConnectionError as e:
+    except (redis.ConnectionError, aioredis.ConnectionError) as e:
         logger.error(f"Redis connection error: {e}")
         raise HTTPException(503, "Redis 연결 실패")
