@@ -1,10 +1,22 @@
+from dotenv import load_dotenv
+load_dotenv()
+
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from concurrent.futures import ThreadPoolExecutor
+from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.routers import api_router
 from app.services.rabbitmq_consumer import start_consumer, stop_consumer
 from loguru import logger
+
+
+class _MetricsFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /metrics" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(_MetricsFilter())
 
 
 executor = ThreadPoolExecutor(max_workers=4)
@@ -35,6 +47,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Prometheus 메트릭 엔드포인트 (/metrics)
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
@@ -60,4 +75,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=False)

@@ -6,7 +6,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False
+        case_sensitive=False,
+        extra="ignore",  # LANGSMITH_* 등 미정의 환경변수 무시
     )
 
     # OpenAI API
@@ -30,6 +31,11 @@ class Settings(BaseSettings):
     # Legal Documents Path
     LEGAL_DOCS_PATH: str
     
+    # MongoDB (OCR 결과 저장소)
+    MONGODB_URI: str = "mongodb://mongoadmin:alaw@localhost:27017/admin?authSource=admin"
+    MONGODB_DB: str = "alawdb"
+    MONGODB_OCR_COLLECTION: str = "ocr_results"
+
     # RabbitMQ (Spring Boot 인프라 연결)
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
 
@@ -38,8 +44,12 @@ class Settings(BaseSettings):
 
     # Analysis Settings
     ANALYSIS_TIMEOUT: int = 60  # GPT-4o 호출 타임아웃 (초)
-    ANALYSIS_QUEUE: str = "contract.analysis.queue"
-    RESULT_EXCHANGE: str = "contract.analysis.result"
+    ANALYSIS_EXCHANGE: str = "contract-analysis-ex"
+    ANALYSIS_QUEUE: str = "contract-analysis-queue"
+    ANALYSIS_ROUTING_KEY: str = "contract.analyze"
+    RESULT_EXCHANGE: str = "contract-analysis-ex"
+    RESULT_QUEUE: str = "contract-analysis-result-queue"
+    RESULT_ROUTING_KEY: str = "contract.analyze.result"
 
     # PostgreSQL Database (Spring Boot와 공유)
     DB_HOST: str = "localhost"
