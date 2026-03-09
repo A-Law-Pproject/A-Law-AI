@@ -14,6 +14,8 @@ from app.schemas.contract import (
     AnalysisResult
 )
 from app.services.analyzer import ContractAnalysisService
+from app.rag.chain.chain import explain_term_rag
+from app.core.dependencies import get_qdrant_client, get_embeddings, get_llm
 
 router = APIRouter()
 executor = ThreadPoolExecutor(max_workers=4)
@@ -24,53 +26,50 @@ def get_analysis_service():
     return ContractAnalysisService()
 
 
-@router.post(
-    "/analyze",
-    response_model=AnalysisResult,
-    summary="계약서 전체 분석",
-    description="""
-    계약서 텍스트를 입력받아 AI 기반 법률 분석을 수행합니다.
+# @router.post(
+#     "/analyze",
+#     response_model=AnalysisResult,
+#     summary="계약서 전체 분석",
+#     description="""
+#     계약서 텍스트를 입력받아 AI 기반 법률 분석을 수행합니다.
 
-    **분석 항목:** 조항 자동 분리, 위험도 분석, RAG 기반 법률 검증, 불법 조항 탐지, 누락 조항 확인
-    """,
-)
-async def analyze_contract(
-    request: ContractRequest = Body(
-        ...,
-        openapi_examples={
-            "주거용 임대차 계약서": {
-                "summary": "주거용 임대차 계약서 예시",
-                "value": {
-                    "text": "제1조 (목적물) 본 계약의 목적물은 서울특별시 강남구 역삼동 123-45 아파트 101동 1001호로 한다.\n제2조 (계약 기간) 본 계약의 기간은 2024년 1월 1일부터 2026년 12월 31일까지 2년으로 한다.\n제3조 (보증금 및 차임) 보증금은 금 일억원정으로 하고, 월 차임은 금 오십만원정으로 한다.\n제4조 (차임 증액) 임대인은 매년 5% 범위 내에서 차임을 증액할 수 있다.",
-                    "contract_id": "CONTRACT_001"
-                }
-            },
-            "위험 조항 포함": {
-                "summary": "위험 조항이 포함된 계약서",
-                "value": {
-                    "text": "제1조 (목적물) 서울시 마포구 OO동 123-45\n제2조 (계약기간) 2024.1.1 ~ 2024.12.31\n제3조 (보증금) 5천만원\n제4조 (특약) 임대인은 언제든지 계약을 해지할 수 있으며, 임차인은 이의를 제기할 수 없다.\n제5조 (차임인상) 임대인은 월세를 매년 10% 인상할 수 있다.",
-                    "contract_id": "CONTRACT_002"
-                }
-            },
-        }
-    )
-):
-    try:
-        service = get_analysis_service()
-        result = await service.analyze_contract(request.text, request.contract_id)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"분석 실패: {str(e)}")
+#     **분석 항목:** 조항 자동 분리, 위험도 분석, RAG 기반 법률 검증, 불법 조항 탐지, 누락 조항 확인
+#     """,
+# )
+# async def analyze_contract(
+#     request: ContractRequest = Body(
+#         ...,
+#         openapi_examples={
+#             "주거용 임대차 계약서": {
+#                 "summary": "주거용 임대차 계약서 예시",
+#                 "value": {
+#                     "text": "제1조 (목적물) 본 계약의 목적물은 서울특별시 강남구 역삼동 123-45 아파트 101동 1001호로 한다.\n제2조 (계약 기간) 본 계약의 기간은 2024년 1월 1일부터 2026년 12월 31일까지 2년으로 한다.\n제3조 (보증금 및 차임) 보증금은 금 일억원정으로 하고, 월 차임은 금 오십만원정으로 한다.\n제4조 (차임 증액) 임대인은 매년 5% 범위 내에서 차임을 증액할 수 있다.",
+#                     "contract_id": "CONTRACT_001"
+#                 }
+#             },
+#             "위험 조항 포함": {
+#                 "summary": "위험 조항이 포함된 계약서",
+#                 "value": {
+#                     "text": "제1조 (목적물) 서울시 마포구 OO동 123-45\n제2조 (계약기간) 2024.1.1 ~ 2024.12.31\n제3조 (보증금) 5천만원\n제4조 (특약) 임대인은 언제든지 계약을 해지할 수 있으며, 임차인은 이의를 제기할 수 없다.\n제5조 (차임인상) 임대인은 월세를 매년 10% 인상할 수 있다.",
+#                     "contract_id": "CONTRACT_002"
+#                 }
+#             },
+#         }
+#     )
+# ):
+#     try:
+#         service = get_analysis_service()
+#         result = await service.analyze_contract(request.text, request.contract_id)
+#         return result
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"분석 실패: {str(e)}")
 
 
 @router.post(
     "/explain/term",
     response_model=TermExplanation,
-    summary="[미구현] 법률 용어 해설",
-    description="""
-    **[미구현]** 현재 하드코딩된 3개 용어(확정일자, 대항력, 우선변제권)만 지원합니다.
-    RAG 기반 동적 용어 해설로 교체 예정입니다.
-    """,
+    summary="법률 용어 해설",
+    description="법률 문서 RAG 검색을 통해 임대차 관련 법률 용어를 설명합니다.",
 )
 async def explain_term(
     request: TermRequest = Body(
@@ -84,20 +83,37 @@ async def explain_term(
                     "surrounding_text": "임차인은 확정일자를 받아야 우선변제권을 행사할 수 있다."
                 }
             },
+            "대항력": {
+                "summary": "대항력이란?",
+                "value": {
+                    "term": "대항력",
+                    "context": "임대차 계약서",
+                    "surrounding_text": "전입신고와 점유를 통해 대항력을 취득한다."
+                }
+            },
         }
     )
 ):
+    qdrant = get_qdrant_client()
+    emb = get_embeddings()
+    llm = get_llm()
+
     try:
-        service = get_analysis_service()
-        loop = asyncio.get_event_loop()
-        explanation = await loop.run_in_executor(
-            executor,
-            service.explain_legal_term,
-            request.term,
-            request.context,
-            request.surrounding_text
+        result = await explain_term_rag(
+            term=request.term,
+            client=qdrant,
+            embeddings=emb,
+            llm=llm,
+            context=request.context,
+            surrounding_text=request.surrounding_text,
         )
-        return explanation
+        return TermExplanation(
+            term=request.term,
+            easy_explanation=result.get("simple_explanation", ""),
+            original_sentence=request.surrounding_text,
+            legal_definition=result.get("legal_definition", ""),
+            examples=result.get("examples", []),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"용어 해설 실패: {str(e)}")
 
@@ -127,7 +143,7 @@ async def analyze_fraud_detection(
 ):
     try:
         service = get_analysis_service()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         tasks = [
             loop.run_in_executor(executor, service.detect_fraud_patterns, request.text),

@@ -38,7 +38,7 @@ def get_ocr_service() -> OCRService:
 # API 엔드포인트
 # ===========================================
 
-@router.post("/ocr", response_model=ContractOCRResponse, summary="S3 이미지 OCR")
+@router.post("/ocr", response_model=ContractOCRResponse, summary="[완료] S3 이미지 OCR")
 async def run_ocr_from_s3(
     request: OCRRequest,
     include_overlay: bool = Query(True, description="오버레이(단어 좌표) 포함 여부"),
