@@ -1,31 +1,41 @@
 """
 RAG 공유 싱글톤 의존성
-- QdrantClient, KUREEmbeddings, ChatOpenAI 인스턴스를 앱 전체에서 재사용
-- rag.py / rabbitmq_consumer.py 등에서 중복 초기화하지 않도록 통합
+- VectorDB, KUREEmbeddings, ChatOpenAI 인스턴스를 앱 전체에서 재사용
+- VECTOR_DB=qdrant → QdrantAdapter (개발)
+- VECTOR_DB=pinecone → PineconeAdapter (배포)
 """
 from loguru import logger
 from langchain_openai import ChatOpenAI
 from motor.motor_asyncio import AsyncIOMotorClient
-from qdrant_client import QdrantClient
 
 from app.core.config import settings
 from app.rag.embedding.kure import KUREEmbeddings
+from app.rag.vector_store.base import VectorDB
 
-_qdrant_client: QdrantClient | None = None
+_vector_db: VectorDB | None = None
 _embeddings: KUREEmbeddings | None = None
 _llm: ChatOpenAI | None = None
 _mongo_client: AsyncIOMotorClient | None = None
 
 
-def get_qdrant_client() -> QdrantClient:
-    global _qdrant_client
-    if _qdrant_client is None:
-        _qdrant_client = QdrantClient(
-            url=settings.QDRANT_URL,
-            api_key=settings.QDRANT_API_KEY,
-        )
-        logger.info("QdrantClient 싱글톤 초기화 완료")
-    return _qdrant_client
+def get_vector_db() -> VectorDB:
+    global _vector_db
+    if _vector_db is None:
+        if settings.VECTOR_DB == "pinecone":
+            from app.rag.vector_store.pinecone_adapter import PineconeAdapter
+            _vector_db = PineconeAdapter(
+                api_key=settings.PINECONE_API_KEY,
+                index_name=settings.PINECONE_INDEX,
+            )
+            logger.info(f"VectorDB: Pinecone (index={settings.PINECONE_INDEX})")
+        else:
+            from app.rag.vector_store.qdrant_adapter import QdrantAdapter
+            _vector_db = QdrantAdapter(
+                url=settings.QDRANT_URL,
+                api_key=settings.QDRANT_API_KEY,
+            )
+            logger.info(f"VectorDB: Qdrant (url={settings.QDRANT_URL})")
+    return _vector_db
 
 
 def get_embeddings() -> KUREEmbeddings:
@@ -56,17 +66,21 @@ def get_mongo_client() -> AsyncIOMotorClient:
     return _mongo_client
 
 
-async def fetch_ocr_text(contract_id: int) -> str:
+async def fetch_ocr_text(s3_key: str) -> str:
     """
-    MongoDB ocr_results 컬렉션에서 contract_id로 full_text 조회.
+    MongoDB ocr_results 컬렉션에서 s3_key로 full_text 조회.
     Spring Boot OCR 처리 후 저장한 텍스트를 가져옴.
     """
     client = get_mongo_client()
     collection = client[settings.MONGODB_DB][settings.MONGODB_OCR_COLLECTION]
-    doc = await collection.find_one({"contractId": contract_id}, {"full_text": 1})
+    # Spring Boot는 camelCase(s3Key, fullText)로 저장 가능 → 두 필드명 모두 시도
+    doc = await collection.find_one(
+        {"$or": [{"s3Key": s3_key}, {"s3_key": s3_key}]},
+        {"fullText": 1, "full_text": 1}
+    )
     if doc is None:
-        raise ValueError(f"OCR 결과 없음: contract_id={contract_id}")
-    text = doc.get("full_text", "")
+        raise ValueError(f"OCR 결과 없음: s3_key={s3_key}")
+    text = doc.get("fullText") or doc.get("full_text", "")
     if not text:
-        raise ValueError(f"full_text가 비어 있음: contract_id={contract_id}")
+        raise ValueError(f"fullText가 비어 있음: s3_key={s3_key}")
     return text

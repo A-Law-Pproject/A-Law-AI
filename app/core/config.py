@@ -18,10 +18,17 @@ class Settings(BaseSettings):
     # Upstage API (OCR용)
     UPSTAGE_API_KEY: str = ""
 
-    # Qdrant Vector Database
-    QDRANT_URL: str
+    # Vector DB 선택: "qdrant" (개발) | "pinecone" (배포)
+    VECTOR_DB: str = "qdrant"
+
+    # Qdrant (로컬/개발)
+    QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: str | None = None
-    QDRANT_COLLECTION: str
+    QDRANT_COLLECTION: str = "legal_documents"
+
+    # Pinecone (배포)
+    PINECONE_API_KEY: str = ""
+    PINECONE_INDEX: str = "alaw-legal"
 
     # RAG Settings
     CHUNK_SIZE: int
@@ -32,8 +39,8 @@ class Settings(BaseSettings):
     LEGAL_DOCS_PATH: str
     
     # MongoDB (OCR 결과 저장소)
-    MONGODB_URI: str = "mongodb://mongoadmin:alaw@localhost:27017/admin?authSource=admin"
-    MONGODB_DB: str = "alawdb"
+    MONGODB_URI: str = "mongodb://localhost:27017/admin?authSource=admin"
+    MONGODB_DB: str = "admin"
     MONGODB_OCR_COLLECTION: str = "ocr_results"
 
     # RabbitMQ (Spring Boot 인프라 연결)
@@ -47,9 +54,9 @@ class Settings(BaseSettings):
     ANALYSIS_EXCHANGE: str = "contract-analysis-ex"
     ANALYSIS_QUEUE: str = "contract-analysis-queue"
     ANALYSIS_ROUTING_KEY: str = "contract.analyze"
-    RESULT_EXCHANGE: str = "contract-analysis-ex"
+    RESULT_EXCHANGE: str = "contract.analysis.result"
     RESULT_QUEUE: str = "contract-analysis-result-queue"
-    RESULT_ROUTING_KEY: str = "contract.analyze.result"
+    RESULT_ROUTING_KEY: str = "ai.result"
 
     # PostgreSQL Database (Spring Boot와 공유)
     DB_HOST: str = "localhost"
