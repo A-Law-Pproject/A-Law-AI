@@ -65,3 +65,15 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/alaw-ai:${{ github.sha }}
           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/alaw-ai:buildcache
           cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/alaw-ai:buildcache,mode=max
+
+      - name: 배포 파이프라인 트리거
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          repository: ${{ github.repository_owner }}/A-Law-Cloud
+          event-type: deploy-fastapi
+          client-payload: |
+            {
+              "service": "fastapi",
+              "image_tag": "${{ github.sha }}"
+            }
