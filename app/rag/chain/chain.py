@@ -6,7 +6,6 @@ from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langsmith import traceable
 from langsmith.wrappers import wrap_openai
-from qdrant_client import QdrantClient
 
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -14,6 +13,7 @@ from app.monitoring.metrics import LLM_LATENCY
 from app.rag.chain.prompts import CONTRACT_QA_PROMPT, RISK_PROMPT, CHAT_PROMPT, TERM_EXPLANATION_PROMPT
 from app.rag.embedding.kure import KUREEmbeddings
 from app.rag.retriever.multi_retriever import search_collection, search_multi_index, async_search_multi_index
+from app.rag.vector_store.base import VectorDB
 
 
 def build_context(documents: list[Document], max_length: int = 2000) -> str:
@@ -59,7 +59,7 @@ def build_context(documents: list[Document], max_length: int = 2000) -> str:
 @traceable()
 def rag_query(
     question: str,
-    client: QdrantClient,
+    client: VectorDB,
     embeddings: KUREEmbeddings,
     llm: ChatOpenAI,
     collections: list[str],
@@ -69,7 +69,7 @@ def rag_query(
 
     Args:
         question: 사용자 질문.
-        client: QdrantClient 인스턴스.
+        client: VectorDB 인스턴스.
         embeddings: 임베딩 모델.
         llm: ChatOpenAI 인스턴스.
         collections: 검색할 컬렉션 리스트.
@@ -98,7 +98,7 @@ def rag_query(
 @traceable()
 def detect_risk(
     user_clause: str,
-    client: QdrantClient,
+    client: VectorDB,
     embeddings: KUREEmbeddings,
     llm: ChatOpenAI,
 ) -> dict:
@@ -106,7 +106,7 @@ def detect_risk(
 
     Args:
         user_clause: 사용자 계약 조항 텍스트.
-        client: QdrantClient 인스턴스.
+        client: VectorDB 인스턴스.
         embeddings: 임베딩 모델.
         llm: ChatOpenAI 인스턴스.
 
@@ -185,7 +185,7 @@ _CHAT_COLLECTIONS = [
 async def chat_rag(
     message: str,
     history: list[dict],
-    client: QdrantClient,
+    client: VectorDB,
     embeddings: KUREEmbeddings,
     llm: ChatOpenAI,
     contract_context: str | None = None,
@@ -198,7 +198,7 @@ async def chat_rag(
         message: 현재 사용자 메시지.
         history: 이전 대화 이력 [{"role": "user"|"assistant", "content": str}, ...].
                  최근 10턴만 사용됨.
-        client: QdrantClient 인스턴스.
+        client: VectorDB 인스턴스.
         embeddings: 임베딩 모델.
         llm: ChatOpenAI 인스턴스.
         contract_context: 사용자가 현재 보고 있는 계약서 텍스트 (선택).
@@ -260,7 +260,7 @@ async def chat_rag(
 @traceable()
 async def explain_term_rag(
     term: str,
-    client: QdrantClient,
+    client: VectorDB,
     embeddings: KUREEmbeddings,
     llm: ChatOpenAI,
     context: str = "",
@@ -272,7 +272,7 @@ async def explain_term_rag(
 
     Args:
         term: 해설할 법률 용어.
-        client: QdrantClient 인스턴스.
+        client: VectorDB 인스턴스.
         embeddings: 임베딩 모델.
         llm: ChatOpenAI 인스턴스.
         context: 용어가 등장한 문맥 (예: "주택임대차보호법").
@@ -316,7 +316,7 @@ class RagBot:
     """Multi-Index RAG 봇 (LangSmith 추적 지원).
 
     Args:
-        client: QdrantClient 인스턴스.
+        client: VectorDB 인스턴스.
         embeddings: 임베딩 모델.
         collections: 검색 대상 컬렉션 리스트.
         model: OpenAI 모델명.
@@ -324,7 +324,7 @@ class RagBot:
 
     def __init__(
         self,
-        client: QdrantClient,
+        client: VectorDB,
         embeddings: KUREEmbeddings,
         collections: list[str],
         model: str = "gpt-4o-mini",

@@ -14,7 +14,7 @@ from aio_pika import ExchangeType, Message
 from loguru import logger
 
 from app.core.config import settings
-from app.core.dependencies import get_qdrant_client, get_embeddings, get_llm, fetch_ocr_text
+from app.core.dependencies import get_vector_db, get_embeddings, get_llm, fetch_ocr_text
 from app.schemas.contract_analysis_dto import (
     ContractAnalysisRequest,
     ContractAnalysisResult,
@@ -23,7 +23,6 @@ from app.schemas.contract_analysis_dto import (
     ClauseRiskResult,
     AnalysisStatus
 )
-from app.services.analyzer import ContractAnalysisService
 from app.rag.chain.chain import rag_query, detect_risk
 
 
@@ -43,7 +42,16 @@ class RabbitMQConsumer:
         self._running = False
 
     async def connect(self):
-        """RabbitMQ 연결"""
+        """RabbitMQ 연결 (기존 연결 정리 후 재연결)"""
+        if self.connection and not self.connection.is_closed:
+            try:
+                await self.connection.close()
+            except Exception:
+                pass
+        self.connection = None
+        self.channel = None
+        self.result_exchange = None
+
         try:
             self.connection = await aio_pika.connect_robust(
                 settings.RABBITMQ_URL,
@@ -72,39 +80,53 @@ class RabbitMQConsumer:
             raise
 
     async def start_consuming(self):
-        """메시지 소비 시작"""
-        if not self.channel:
-            await self.connect()
-
-        # Spring Boot가 publish하는 Exchange 선언 (Spring Boot 설정과 동일해야 함)
-        analysis_exchange = await self.channel.declare_exchange(
-            settings.ANALYSIS_EXCHANGE,
-            ExchangeType.DIRECT,
-            durable=True
-        )
-
-        # 분석 요청 Queue 선언 + Exchange 바인딩
-        # Spring Boot QueueBuilder 인자와 완전히 동일해야 함 (PRECONDITION_FAILED 방지)
-        analysis_queue = await self.channel.declare_queue(
-            settings.ANALYSIS_QUEUE,
-            durable=True,
-            arguments={
-                "x-message-ttl": 86400000,
-                "x-dead-letter-exchange": settings.ANALYSIS_EXCHANGE + ".dlx",
-                "x-dead-letter-routing-key": settings.ANALYSIS_ROUTING_KEY + ".failed",
-            },
-        )
-        await analysis_queue.bind(analysis_exchange, routing_key=settings.ANALYSIS_ROUTING_KEY)
-
+        """메시지 소비 시작 (재연결 루프 포함)"""
         self._running = True
-        logger.info(f"Starting to consume from: {settings.ANALYSIS_QUEUE}")
+        retry_delay = 5
 
-        async with analysis_queue.iterator() as queue_iter:
-            async for message in queue_iter:
+        while self._running:
+            try:
+                await self.connect()
+
+                # Spring Boot가 publish하는 Exchange 선언 (Spring Boot 설정과 동일해야 함)
+                analysis_exchange = await self.channel.declare_exchange(
+                    settings.ANALYSIS_EXCHANGE,
+                    ExchangeType.DIRECT,
+                    durable=True
+                )
+
+                # 분석 요청 Queue 선언 + Exchange 바인딩
+                # Spring Boot QueueBuilder 인자와 완전히 동일해야 함 (PRECONDITION_FAILED 방지)
+                analysis_queue = await self.channel.declare_queue(
+                    settings.ANALYSIS_QUEUE,
+                    durable=True,
+                    arguments={
+                        "x-message-ttl": 86400000,
+                        "x-dead-letter-exchange": settings.ANALYSIS_EXCHANGE + ".dlx",
+                        "x-dead-letter-routing-key": settings.ANALYSIS_ROUTING_KEY + ".failed",
+                    },
+                )
+                await analysis_queue.bind(analysis_exchange, routing_key=settings.ANALYSIS_ROUTING_KEY)
+
+                retry_delay = 5  # 연결 성공 시 재시도 딜레이 초기화
+                logger.info(f"Starting to consume from: {settings.ANALYSIS_QUEUE}")
+
+                async with analysis_queue.iterator() as queue_iter:
+                    async for message in queue_iter:
+                        if not self._running:
+                            return
+                        async with message.process():
+                            await self._handle_message(message)
+
+            except asyncio.CancelledError:
+                logger.info("[Consumer] Consuming cancelled")
+                return
+            except Exception as e:
                 if not self._running:
-                    break
-                async with message.process():
-                    await self._handle_message(message)
+                    return
+                logger.error(f"[Consumer] Connection lost, retrying in {retry_delay}s: {e}")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 60)  # 최대 60초까지 exponential backoff
 
     async def _handle_message(self, message: aio_pika.IncomingMessage):
         job_id = "unknown"
@@ -137,8 +159,8 @@ class RabbitMQConsumer:
         start_time = time.time()
         try:
             # 1. MongoDB에서 OCR 텍스트 조회
-            logger.info(f"[Consumer] MongoDB 텍스트 조회: contract_id={request.contract_id}")
-            text = await fetch_ocr_text(request.contract_id)
+            logger.info(f"[Consumer] MongoDB 텍스트 조회: s3_key={request.s3_key}")
+            text = await fetch_ocr_text(request.s3_key)
             logger.info(f"[Consumer] 텍스트 조회 완료: {len(text)}자")
 
             # 2. 요약 + Risk 분석 병렬 실행
@@ -179,16 +201,32 @@ class RabbitMQConsumer:
                         summary_text_parts.append(f"• {point['answer']}")
 
                 summary_text = "\n\n".join(summary_text_parts) if summary_text_parts else "계약서 요약 정보가 없습니다."
+                basic_info = summary_result.get("basic_info", {})
+                key_terms = []
+                if basic_info.get("deposit"):
+                    key_terms.append(f"보증금 {basic_info['deposit']}원")
+                if basic_info.get("monthly_rent"):
+                    key_terms.append(f"월세 {basic_info['monthly_rent']}원")
+                if basic_info.get("contract_period"):
+                    key_terms.append(f"계약기간 {basic_info['contract_period']}")
+
                 result.summary = ContractSummary(
                     title="임대차 계약서",
                     summary_text=summary_text,
-                    key_terms=self._generate_recommendations(risk_analysis_result),
+                    key_terms=key_terms,
                 )
 
             # Risk 분석 결과 추가
             if risk_analysis_result and risk_analysis_result.get("clauses"):
+                risk_summary = risk_analysis_result.get("risk_summary", {})
+                clauses = risk_analysis_result["clauses"]
+                total = len(clauses)
                 result.risk_analysis = RiskAnalysisResult(
-                    total_clauses=len(risk_analysis_result["clauses"]),
+                    total_clauses=total,
+                    risk_count=risk_summary.get("Risk", 0),
+                    caution_count=risk_summary.get("Caution", 0),
+                    safety_count=risk_summary.get("Safety", 0),
+                    risk_percentage=round(risk_summary.get("Risk", 0) / total * 100, 1) if total > 0 else 0.0,
                     clause_results=[
                         ClauseRiskResult(
                             clause_title=clause["title"],
@@ -197,7 +235,7 @@ class RabbitMQConsumer:
                             legal_reference=f"독소조항 유사도: {clause.get('illegal_similarity', 0):.2f}",
                             recommendation=clause["recommendation"],
                         )
-                        for clause in risk_analysis_result["clauses"]
+                        for clause in clauses
                     ],
                 )
 
@@ -215,7 +253,7 @@ class RabbitMQConsumer:
         """
         try:
             try:
-                qdrant_client = get_qdrant_client()
+                qdrant_client = get_vector_db()
                 embeddings = get_embeddings()
                 llm = get_llm()
             except Exception as e:
@@ -229,26 +267,28 @@ class RabbitMQConsumer:
                 "특약사항이나 특이사항이 있다면 무엇인가요?"
             ]
 
+            # RAG 질의 3개 병렬 실행
+            async def _query(question: str):
+                return await asyncio.to_thread(
+                    rag_query,
+                    question=f"{question}\n\n계약서 내용:\n{text[:2000]}",
+                    client=qdrant_client,
+                    embeddings=embeddings,
+                    llm=llm,
+                    collections=["law_database"],
+                    k_per_collection=2,
+                )
+
+            results = await asyncio.gather(
+                *[_query(q) for q in summary_questions],
+                return_exceptions=True
+            )
             key_points = []
-            for question in summary_questions:
-                try:
-                    # 계약서 텍스트를 컨텍스트로 사용하여 RAG 질의 (blocking sync → thread)
-                    result = await asyncio.to_thread(
-                        rag_query,
-                        question=f"{question}\n\n계약서 내용:\n{text[:2000]}",
-                        client=qdrant_client,
-                        embeddings=embeddings,
-                        llm=llm,
-                        collections=["law_database"],
-                        k_per_collection=2,
-                    )
-                    key_points.append({
-                        "question": question,
-                        "answer": result["answer"]
-                    })
-                except Exception as e:
-                    logger.error(f"[Consumer] RAG 질의 실패: {e}")
+            for question, result in zip(summary_questions, results):
+                if isinstance(result, Exception):
+                    logger.error(f"[Consumer] RAG 질의 실패: {result}")
                     continue
+                key_points.append({"question": question, "answer": result["answer"]})
 
             # 기본 정보 추출
             basic_info = self._extract_basic_info(text)
@@ -320,7 +360,7 @@ class RabbitMQConsumer:
         """
         try:
             try:
-                qdrant_client = get_qdrant_client()
+                qdrant_client = get_vector_db()
                 embeddings = get_embeddings()
                 llm = get_llm()
             except Exception as e:
@@ -476,33 +516,13 @@ class RabbitMQConsumer:
             return "Safety"
 
     async def _basic_risk_analysis(self, text: str) -> dict:
-        """RAG 실패 시 기본 위험 분석 (ContractAnalysisService 사용)"""
-        try:
-            analyzer = ContractAnalysisService()
-            result = await analyzer.analyze_contract(text, "unknown")
-
-            return {
-                "total_clauses": result.total_clauses,
-                "risk_summary": result.risk_summary,
-                "overall_risk_score": result.overall_risk_score,
-                "clauses": [
-                    {
-                        "title": clause.title,
-                        "content": clause.content,
-                        "risk_level": clause.risk_level,
-                        "recommendation": clause.recommendation
-                    }
-                    for clause in result.clauses
-                ] if result.clauses else []
-            }
-        except Exception as e:
-            logger.error(f"[Consumer] Basic risk analysis failed: {e}")
-            return {
-                "total_clauses": 0,
-                "risk_summary": {"Risk": 0, "Caution": 0, "Safety": 0},
-                "overall_risk_score": 0,
-                "clauses": []
-            }
+        """RAG 실패 시 빈 결과 반환"""
+        return {
+            "total_clauses": 0,
+            "risk_summary": {"Risk": 0, "Caution": 0, "Safety": 0},
+            "overall_risk_score": 0,
+            "clauses": []
+        }
 
     def _generate_recommendations(self, risk_result: dict) -> list[str]:
         """위험 분석 결과를 바탕으로 권장사항 생성"""
@@ -580,7 +600,6 @@ consumer = RabbitMQConsumer()
 
 async def start_consumer():
     """Consumer 시작 (FastAPI startup에서 호출)"""
-    await consumer.connect()
     asyncio.create_task(consumer.start_consuming())
     logger.info("[Consumer] Started in background")
 

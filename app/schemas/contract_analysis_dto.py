@@ -3,7 +3,8 @@
 - Spring Boot와 RabbitMQ로 통신하기 위한 메시지 스키마
 """
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+from pydantic.alias_generators import to_camel
 from datetime import datetime
 from enum import Enum
 
@@ -32,15 +33,17 @@ class ContractAnalysisRequest(BaseModel):
     Spring Boot에서 발행하는 분석 요청 메시지
     Queue: contract-analysis-queue
 
-    Spring Boot @JsonProperty("snake_case") 기준
+    camelCase(jobId) / snake_case(job_id) 모두 허용
     """
-    job_id: str = Field(..., alias="job_id")
-    contract_id: int = Field(..., alias="contract_id")
-    s3_key: str = Field(..., alias="s3_key")
-    user_id: int = Field(..., alias="user_id")
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
 
-    class Config:
-        populate_by_name = True
+    job_id: str = Field(...)
+    contract_id: int = Field(...)
+    s3_key: str = Field(...)
+    user_id: int = Field(...)
 
 
 # ========================
