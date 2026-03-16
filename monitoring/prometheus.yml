@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s       # 5초마다 수집 (부하 테스트 중 실시간 반영)
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "fastapi"
+    static_configs:
+      - targets: ["host.docker.internal:8001"]
+    metrics_path: "/metrics"
+    scrape_timeout: 4s

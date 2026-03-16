@@ -1,0 +1,56 @@
+# A-LAW 모니터링 스택 (Prometheus + Grafana)
+# 사용법: docker-compose -f docker-compose.monitoring.yml up -d
+#
+# FastAPI 서버는 로컬(8001)에서 실행되어야 합니다:
+#   python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+#
+# 접속:
+#   Prometheus : http://localhost:9090
+#   Grafana    : http://localhost:3000  (admin / admin)
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: alaw-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux 호환
+    restart: unless-stopped
+    networks:
+      - alaw-monitoring
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: alaw-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/rag-dashboard.json
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - alaw-monitoring
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  alaw-monitoring:
+    driver: bridge
