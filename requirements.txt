@@ -7,6 +7,7 @@ python-multipart==0.0.17
 langchain>=0.3.0
 langchain-core>=0.3.0
 langchain-openai>=0.2.0
+langchain-text-splitters>=0.3.0
 langsmith>=0.1.0
 
 # Vector Database (Qdrant)
