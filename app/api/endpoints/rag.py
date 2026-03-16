@@ -12,7 +12,7 @@ from loguru import logger
 
 from app.rag.chain.chain import detect_risk
 from app.core.config import settings
-from app.core.dependencies import get_qdrant_client, get_embeddings, get_llm
+from app.core.dependencies import get_vector_db, get_embeddings, get_llm
 
 router = APIRouter()
 
@@ -76,14 +76,10 @@ class RiskDetectionResponse(BaseModel):
 async def health_check():
     """RAG 시스템 상태 확인"""
     try:
-        qdrant_client = get_qdrant_client()
-        collections = qdrant_client.get_collections().collections
-        collection_names = [c.name for c in collections]
-
+        get_vector_db()
         return {
             "status": "healthy",
-            "qdrant_url": settings.QDRANT_URL,
-            "collections": collection_names,
+            "vector_db": settings.VECTOR_DB,
             "embedding_model": "KURE",
             "llm_model": settings.MODEL_NAME
         }
@@ -99,7 +95,7 @@ async def detect_clause_risk(request: RiskDetectionRequest):
 
     계약 조항의 위험도를 분석하고 법률 근거 제시
     """
-    qdrant_client = get_qdrant_client()
+    db = get_vector_db()
     embeddings = get_embeddings()
     llm = get_llm()
 
@@ -107,7 +103,7 @@ async def detect_clause_risk(request: RiskDetectionRequest):
         result = await asyncio.to_thread(
             detect_risk,
             user_clause=request.clause_text,
-            client=qdrant_client,
+            client=db,
             embeddings=embeddings,
             llm=llm,
         )

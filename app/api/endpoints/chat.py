@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from loguru import logger
 
 from app.core.config import settings
-from app.core.dependencies import get_qdrant_client, get_embeddings, get_llm
+from app.core.dependencies import get_vector_db, get_embeddings, get_llm
 from app.rag.chain.chain import chat_rag
 from app.schemas.chat import ChatRequest, ChatResponse, ChatHistoryResponse
 
@@ -62,11 +62,11 @@ async def chat(request: ChatRequest):
     - 병렬 멀티 인덱스 검색으로 관련 법률 문서 검색
     - Spring Boot는 응답의 session_id를 저장해 다음 요청에 재사용
     """
-    qdrant = get_qdrant_client()
+    db = get_vector_db()
     embeddings = get_embeddings()
     llm = get_llm()
 
-    if not all([qdrant, embeddings, llm]):
+    if not all([db, embeddings, llm]):
         raise HTTPException(status_code=503, detail="RAG 시스템 초기화 실패")
 
     # 세션 ID 결정
@@ -79,7 +79,7 @@ async def chat(request: ChatRequest):
         result = await chat_rag(
             message=request.message,
             history=history,
-            client=qdrant,
+            client=db,
             embeddings=embeddings,
             llm=llm,
             contract_context=request.contract_context,
