@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
+# KURE-v1 모델 이미지에 포함 (런타임 다운로드 방지)
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('nlpai-lab/KURE-v1')"
+
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM python:3.11-slim-bookworm
 
@@ -24,12 +27,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
     libgomp1 \
+    libglib2.0-0 \
+    libgl1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # 빌드 스테이지에서 설치된 Python 패키지만 복사
 COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
+# HuggingFace 모델 캐시 복사 (KURE-v1)
+COPY --from=builder /root/.cache/huggingface/ /root/.cache/huggingface/
 
 # 애플리케이션 코드 복사
 COPY . .
