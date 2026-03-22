@@ -12,7 +12,8 @@ COPY requirements.txt .
 # torch CPU-only 먼저 설치 (GPU 버전 ~4GB 방지 → CPU ~300MB)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip uninstall -y pinecone-client || true
 
 # KURE-v1 모델 이미지에 포함 (런타임 다운로드 방지)
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('nlpai-lab/KURE-v1')"

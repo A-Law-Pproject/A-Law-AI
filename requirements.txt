@@ -33,7 +33,7 @@ sentence-transformers>=2.3.0
 aio-pika>=9.4.0
 
 # Vector DB - Pinecone (배포 환경)
-pinecone-client>=3.0.0
+pinecone>=3.0.0
 
 # Cache - Redis
 redis>=5.0.0
