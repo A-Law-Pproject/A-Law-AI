@@ -23,7 +23,7 @@ from app.schemas.contract_analysis_dto import (
     ClauseRiskResult,
     AnalysisStatus
 )
-from app.rag.chain.chain import rag_query, detect_risk
+from app.rag.chain.chain import rag_query, detect_risk_contract
 
 
 class RabbitMQConsumer:
@@ -40,6 +40,15 @@ class RabbitMQConsumer:
         self.channel: Optional[aio_pika.Channel] = None
         self.result_exchange: Optional[aio_pika.Exchange] = None
         self._running = False
+        self._consume_task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _overall_risk_level(score: float) -> str:
+        if score >= 70:
+            return "위험"
+        if score >= 40:
+            return "주의"
+        return "안전"
 
     async def connect(self):
         """RabbitMQ 연결 (기존 연결 정리 후 재연결)"""
@@ -78,6 +87,43 @@ class RabbitMQConsumer:
         except Exception as e:
             logger.error(f"RabbitMQ connection failed: {e}")
             raise
+
+    async def setup_topology(self):
+        """필수 Exchange/Queue 선언 및 바인딩."""
+        if self.channel is None:
+            raise RuntimeError("RabbitMQ channel is not initialized")
+
+        analysis_exchange = await self.channel.declare_exchange(
+            settings.ANALYSIS_EXCHANGE,
+            ExchangeType.DIRECT,
+            durable=True
+        )
+        analysis_queue = await self.channel.declare_queue(
+            settings.ANALYSIS_QUEUE,
+            durable=True,
+            arguments={
+                "x-message-ttl": 86400000,
+                "x-dead-letter-exchange": settings.ANALYSIS_EXCHANGE + ".dlx",
+                "x-dead-letter-routing-key": settings.ANALYSIS_ROUTING_KEY + ".failed",
+            },
+        )
+        await analysis_queue.bind(analysis_exchange, routing_key=settings.ANALYSIS_ROUTING_KEY)
+        logger.info(f"RabbitMQ topology is ready: queue={settings.ANALYSIS_QUEUE}")
+        return analysis_queue
+
+    async def ensure_ready(self):
+        """부팅 시점 readiness 검증."""
+        await self.connect()
+        await self.setup_topology()
+
+    def is_healthy(self) -> bool:
+        return bool(
+            self.connection
+            and not self.connection.is_closed
+            and self.channel
+            and not self.channel.is_closed
+            and self.result_exchange is not None
+        )
 
     async def start_consuming(self):
         """메시지 소비 시작 (재연결 루프 포함)"""
@@ -223,17 +269,24 @@ class RabbitMQConsumer:
                 total = len(clauses)
                 result.risk_analysis = RiskAnalysisResult(
                     total_clauses=total,
+                    overall_risk_score=float(risk_analysis_result.get("overall_risk_score", 0)),
+                    overall_risk_level=self._overall_risk_level(float(risk_analysis_result.get("overall_risk_score", 0))),
                     risk_count=risk_summary.get("Risk", 0),
                     caution_count=risk_summary.get("Caution", 0),
                     safety_count=risk_summary.get("Safety", 0),
                     risk_percentage=round(risk_summary.get("Risk", 0) / total * 100, 1) if total > 0 else 0.0,
+                    detected_clause_count=risk_summary.get("Risk", 0) + risk_summary.get("Caution", 0),
                     clause_results=[
                         ClauseRiskResult(
-                            clause_title=clause["title"],
-                            clause_content=clause["content"],
+                            clause_title=clause.get("category") or clause.get("title") or clause.get("text", "")[:40],
+                            clause_content=clause.get("content") or clause.get("text", ""),
                             risk_level=clause["risk_level"],
-                            legal_reference=f"독소조항 유사도: {clause.get('illegal_similarity', 0):.2f}",
-                            recommendation=clause["recommendation"],
+                            category=clause.get("category", ""),
+                            score=int(clause.get("score", 0)),
+                            legal_reference=clause.get("related_law", ""),
+                            recommendation=clause.get("recommendation") or clause.get("analysis", ""),
+                            reasoning_summary=clause.get("analysis", ""),
+                            related_law=clause.get("related_law", ""),
                         )
                         for clause in clauses
                     ],
@@ -253,7 +306,7 @@ class RabbitMQConsumer:
         """
         try:
             try:
-                qdrant_client = get_vector_db()
+                db = get_vector_db()
                 embeddings = get_embeddings()
                 llm = get_llm()
             except Exception as e:
@@ -272,7 +325,7 @@ class RabbitMQConsumer:
                 return await asyncio.to_thread(
                     rag_query,
                     question=f"{question}\n\n계약서 내용:\n{text[:2000]}",
-                    client=qdrant_client,
+                    client=db,
                     embeddings=embeddings,
                     llm=llm,
                     collections=["law_database"],
@@ -353,167 +406,34 @@ class RabbitMQConsumer:
         return info
 
     async def _perform_risk_analysis(self, text: str) -> dict:
-        """
-        RAG 기반 계약서 위험 분석
-
-        독소조항 DB를 활용하여 각 조항의 위험도를 분석
-        """
+        """RAG 기반 계약서 위험 분석 (detect_risk_contract 위임)."""
         try:
-            try:
-                qdrant_client = get_vector_db()
-                embeddings = get_embeddings()
-                llm = get_llm()
-            except Exception as e:
-                logger.warning(f"[Consumer] RAG 미초기화 - 기본 분석 사용: {e}")
-                return await self._basic_risk_analysis(text)
+            db = get_vector_db()
+            embeddings = get_embeddings()
+            llm = get_llm()
+        except Exception as e:
+            logger.warning(f"[Consumer] RAG 미초기화 - 빈 결과 반환: {e}")
+            return await self._basic_risk_analysis(text)
 
-            # 계약서를 조항으로 분리
-            clauses = self._split_into_clauses(text)
-            logger.info(f"[Consumer] 계약서를 {len(clauses)}개 조항으로 분리")
-
-            analyzed_clauses = []
-            risk_count = 0
-            caution_count = 0
-            safety_count = 0
-
-            for idx, clause in enumerate(clauses, 1):
-                if len(clause["content"].strip()) < 20:  # 너무 짧은 조항은 스킵
-                    continue
-
-                try:
-                    logger.debug(f"[Consumer] 조항 {idx}/{len(clauses)} 분석 중...")
-
-                    # RAG 기반 독소조항 탐지 (blocking sync → thread)
-                    risk_result = await asyncio.to_thread(
-                        detect_risk,
-                        user_clause=clause["content"],
-                        client=qdrant_client,
-                        embeddings=embeddings,
-                        llm=llm,
-                    )
-
-                    # 위험도 판정
-                    risk_level = self._determine_risk_level(
-                        risk_result["illegal_similarity"],
-                        risk_result["normal_similarity"],
-                        risk_result["risk_delta"]
-                    )
-
-                    if risk_level == "Risk":
-                        risk_count += 1
-                    elif risk_level == "Caution":
-                        caution_count += 1
-                    else:
-                        safety_count += 1
-
-                    analyzed_clauses.append({
-                        "title": clause["title"],
-                        "content": clause["content"],
-                        "risk_level": risk_level,
-                        "recommendation": risk_result["analysis"],
-                        "illegal_similarity": risk_result["illegal_similarity"],
-                        "normal_similarity": risk_result["normal_similarity"],
-                        "risk_delta": risk_result["risk_delta"]
-                    })
-
-                    # 최대 10개 조항만 분석 (시간 절약)
-                    if len(analyzed_clauses) >= 10:
-                        logger.info("[Consumer] 최대 분석 조항 수 도달 (10개)")
-                        break
-
-                except Exception as e:
-                    logger.error(f"[Consumer] 조항 {idx} 분석 실패: {e}")
-                    continue
-
-            total_analyzed = len(analyzed_clauses)
-            overall_risk_score = (
-                (risk_count * 100 + caution_count * 50) / total_analyzed
-                if total_analyzed > 0 else 0
+        try:
+            result = await detect_risk_contract(
+                user_clause=text,
+                client=db,
+                embeddings=embeddings,
+                llm=llm,
             )
-
-            result = {
-                "total_clauses": total_analyzed,
-                "risk_summary": {
-                    "Risk": risk_count,
-                    "Caution": caution_count,
-                    "Safety": safety_count
-                },
-                "overall_risk_score": round(overall_risk_score, 1),
-                "clauses": analyzed_clauses[:10]  # 상위 10개만 반환
-            }
-
+            rs = result["risk_summary"]
             logger.info(
-                f"[Consumer] RAG 기반 위험 분석 완료 - "
-                f"Risk: {risk_count}, Caution: {caution_count}, Safety: {safety_count}"
+                f"[Consumer] RAG 위험 분석 완료 - "
+                f"Risk: {rs['Risk']}, Caution: {rs['Caution']}, Safety: {rs['Safety']}"
             )
+            # Spring Boot 쪽이 참조하는 'recommendation' 키 추가 (analysis는 유지)
+            for clause in result["clauses"]:
+                clause["recommendation"] = clause.get("analysis", "")
             return result
-
         except Exception as e:
             logger.error(f"[Consumer] Risk analysis error: {e}")
             return await self._basic_risk_analysis(text)
-
-    def _split_into_clauses(self, text: str) -> list[dict]:
-        """
-        계약서를 조항으로 분리
-
-        조항 구분 기준:
-        - 제X조, 제X항 패턴
-        - 특약사항
-        - 번호 매김 (1., 2., ...)
-        """
-        import re
-
-        clauses = []
-
-        # 제X조 패턴으로 분리
-        article_pattern = r'(제\s*\d+\s*조[^\n]*)\n([^제]*)'
-        matches = re.finditer(article_pattern, text)
-
-        for match in matches:
-            title = match.group(1).strip()
-            content = match.group(2).strip()
-            if content:
-                clauses.append({"title": title, "content": content})
-
-        # 특약사항 분리
-        special_pattern = r'(특약\s*사항|특약|기타\s*사항)[:\s]*\n([^제]*)'
-        special_match = re.search(special_pattern, text, re.IGNORECASE)
-        if special_match:
-            clauses.append({
-                "title": "특약사항",
-                "content": special_match.group(2).strip()
-            })
-
-        # 조항이 없으면 문단으로 분리
-        if len(clauses) == 0:
-            paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-            for i, para in enumerate(paragraphs[:5], 1):  # 최대 5개 문단
-                clauses.append({
-                    "title": f"문단 {i}",
-                    "content": para
-                })
-
-        return clauses
-
-    def _determine_risk_level(
-        self,
-        illegal_similarity: float,
-        normal_similarity: float,
-        risk_delta: float
-    ) -> str:
-        """
-        위험도 판정
-
-        - Risk: 독소조항 유사도가 높고 정상조항 유사도가 낮음
-        - Caution: 중간 정도
-        - Safety: 안전
-        """
-        if illegal_similarity > 0.7 and risk_delta > 0.1:
-            return "Risk"
-        elif illegal_similarity > 0.5 or risk_delta > 0:
-            return "Caution"
-        else:
-            return "Safety"
 
     async def _basic_risk_analysis(self, text: str) -> dict:
         """RAG 실패 시 빈 결과 반환"""
@@ -589,6 +509,13 @@ class RabbitMQConsumer:
     async def stop(self):
         """Consumer 종료"""
         self._running = False
+        if self._consume_task and not self._consume_task.done():
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        self._consume_task = None
         if self.connection:
             await self.connection.close()
             logger.info("[Consumer] Disconnected from RabbitMQ")
@@ -600,8 +527,11 @@ consumer = RabbitMQConsumer()
 
 async def start_consumer():
     """Consumer 시작 (FastAPI startup에서 호출)"""
-    asyncio.create_task(consumer.start_consuming())
-    logger.info("[Consumer] Started in background")
+    await consumer.ensure_ready()
+    consumer._running = True
+    if consumer._consume_task is None or consumer._consume_task.done():
+        consumer._consume_task = asyncio.create_task(consumer.start_consuming())
+    logger.info("[Consumer] Started after RabbitMQ readiness check")
 
 
 async def stop_consumer():
