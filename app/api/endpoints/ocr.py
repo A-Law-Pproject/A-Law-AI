@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.util.s3_client import S3Client
 from app.services.ocr.ocr_service import OCRService
 from app.schemas.ocr_response import ContractOCRResponse
+from app.core.dependencies import save_ocr_result
 
 
 router = APIRouter()
@@ -54,6 +55,10 @@ async def run_ocr_from_s3(
             structurize=False,
             include_overlay=include_overlay,
         )
+        try:
+            await save_ocr_result(request.s3_key, result)
+        except Exception as e:
+            logger.warning(f"MongoDB OCR 결과 저장 실패(s3_key={request.s3_key}): {e}")
 
         return result
 

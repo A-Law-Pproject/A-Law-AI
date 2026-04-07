@@ -79,7 +79,7 @@ async def health_check():
         get_vector_db()
         return {
             "status": "healthy",
-            "vector_db": settings.VECTOR_DB,
+            "vector_db": "pinecone",
             "embedding_model": "KURE",
             "llm_model": settings.MODEL_NAME
         }

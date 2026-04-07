@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     # Legal Documents Path
     LEGAL_DOCS_PATH: str
     
-    # MongoDB (OCR 결과 저장소)
-    MONGODB_URI: str = "mongodb://localhost:27017/admin?authSource=admin"
+    # MongoDB (OCR 결과 저장소 - Atlas)
+    MONGODB_URI: str = "mongodb+srv://mongoadmin:alaw@cluster0.t0cklix.mongodb.net/?appName=Cluster0"
     MONGODB_DB: str = "admin"
     MONGODB_OCR_COLLECTION: str = "ocr_results"
 
@@ -58,13 +58,6 @@ class Settings(BaseSettings):
     RESULT_EXCHANGE: str = "contract.analysis.result"
     RESULT_QUEUE: str = "contract-analysis-result-queue"
     RESULT_ROUTING_KEY: str = "ai.result"
-
-    # PostgreSQL Database (Spring Boot와 공유)
-    DB_HOST: str = "localhost"
-    DB_PORT: int = 5432
-    DB_NAME: str = "alawdb"
-    DB_USER: str = "alawuser"
-    DB_PASSWORD: str = "alaw"
 
     # AWS S3 (Spring Boot와 공유)
     AWS_ACCESS_KEY_ID: str = ""

@@ -3,12 +3,12 @@ load_dotenv()
 
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from concurrent.futures import ThreadPoolExecutor
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.routers import api_router
-from app.services.rabbitmq_consumer import start_consumer, stop_consumer
+from app.services.rabbitmq_consumer import start_consumer, stop_consumer, consumer
 from loguru import logger
 
 
@@ -26,12 +26,8 @@ executor = ThreadPoolExecutor(max_workers=4)
 async def lifespan(app: FastAPI):
     """FastAPI Lifespan - RabbitMQ Consumer 시작/종료"""
     logger.info("Starting RabbitMQ Consumer...")
-    try:
-        await start_consumer()
-        logger.info("RabbitMQ Consumer started successfully")
-    except Exception as e:
-        logger.warning(f"RabbitMQ Consumer failed to start: {e}")
-        logger.warning("The API will still work, but message queue processing is disabled")
+    await start_consumer()
+    logger.info("RabbitMQ Consumer started successfully")
 
     yield
 
@@ -66,10 +62,14 @@ app.include_router(api_router, prefix="/ai")
 @app.get("/health", tags=["시스템"])
 async def health_check():
     """서버 헬스체크"""
+    if not consumer.is_healthy():
+        raise HTTPException(status_code=503, detail="RabbitMQ is not connected")
+
     return {
         "status": "healthy",
         "service": "A-LAW FastAPI",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "rabbitmq": "connected"
     }
 
 
