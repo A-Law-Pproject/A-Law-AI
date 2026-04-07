@@ -55,9 +55,12 @@ class ClauseRiskResult(BaseModel):
     clause_title: str = Field(..., alias="clauseTitle")
     clause_content: str = Field(..., alias="clauseContent")
     risk_level: str = Field(..., alias="riskLevel")
+    category: str = Field(default="", alias="category")
+    score: int = Field(default=0, alias="score")
     legal_reference: str = Field(default="", alias="legalReference")
     recommendation: str = Field(default="")
     reasoning_summary: str = Field(default="", alias="reasoningSummary")
+    related_law: str = Field(default="", alias="relatedLaw")
 
     class Config:
         populate_by_name = True
@@ -66,10 +69,13 @@ class ClauseRiskResult(BaseModel):
 class RiskAnalysisResult(BaseModel):
     """Risk 분석 전체 결과"""
     total_clauses: int = Field(..., alias="totalClauses")
+    overall_risk_score: float = Field(default=0.0, alias="overallRiskScore")
+    overall_risk_level: str = Field(default="", alias="overallRiskLevel")
     risk_count: int = Field(default=0, alias="riskCount")
     caution_count: int = Field(default=0, alias="cautionCount")
     safety_count: int = Field(default=0, alias="safetyCount")
     risk_percentage: float = Field(default=0.0, alias="riskPercentage")
+    detected_clause_count: int = Field(default=0, alias="detectedClauseCount")
     clause_results: List[ClauseRiskResult] = Field(default_factory=list, alias="clauseResults")
 
     class Config:
