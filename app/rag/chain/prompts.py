@@ -85,3 +85,52 @@ RISK_PROMPT = PromptTemplate(
 - 설명: [왜 위험한지 또는 안전한지]
 - 권장 조치: [구체적 조언]""",
 )
+
+CONTRACT_RISK_PROMPT = PromptTemplate(
+    input_variables=["contract_text", "illegal_matches", "normal_matches", "law_context"],
+    template="""당신은 한국 임대차 계약서 분석 전문 AI입니다.
+아래 계약서 전문을 조항 단위로 분석하여 위험 요소를 찾아주세요.
+
+=== 계약서 전문 ===
+{contract_text}
+
+=== 유사한 독소조항 사례 (RAG 검색 결과) ===
+{illegal_matches}
+
+=== 유사한 정상조항 사례 (RAG 검색 결과) ===
+{normal_matches}
+
+=== 관련 법률 (RAG 검색 결과) ===
+{law_context}
+
+위 정보를 바탕으로 계약서의 모든 특약 및 주요 조항을 분석하세요.
+
+반드시 아래 JSON 형식으로만 출력하세요. 다른 텍스트는 포함하지 마세요.
+
+{{
+  "overall_risk_score": 0~100 사이 정수 (위험도 종합 점수),
+  "risk_summary": {{
+    "Risk": 위험 조항 개수,
+    "Caution": 주의 조항 개수,
+    "Safety": 안전 조항 개수
+  }},
+  "total_clauses": 분석된 전체 조항 개수,
+  "clauses": [
+    {{
+      "text": "조항 원문 텍스트",
+      "risk_level": "위험" | "주의" | "안전",
+      "category": "조항 유형 (예: 임차인에게 불리한 조항, 보증금 관련, 관리 규정 등)",
+      "analysis": "이 조항이 위험/주의/안전한 이유를 2~3문장으로 설명",
+      "related_law": "관련 법률 조항 (예: 주택임대차보호법 제3조, 없으면 빈 문자열)",
+      "score": 0~100 사이 정수 (해당 조항 위험 점수)
+    }}
+  ]
+}}
+
+판단 기준:
+- 위험: 임차인에게 일방적으로 불리하거나 법령 위반 소지가 있는 조항 (score 70~100)
+- 주의: 분쟁 가능성이 있거나 주의가 필요한 조항 (score 40~69)
+- 안전: 일반적이고 공정한 조항 (score 0~39)
+
+JSON만 출력하고 다른 텍스트는 포함하지 마세요.""",
+)

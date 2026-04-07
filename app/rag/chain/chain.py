@@ -1,5 +1,7 @@
 import json
 import time
+import tiktoken
+from functools import lru_cache
 
 import openai
 from langchain_core.documents import Document
@@ -10,10 +12,27 @@ from langsmith.wrappers import wrap_openai
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.monitoring.metrics import LLM_LATENCY
-from app.rag.chain.prompts import CONTRACT_QA_PROMPT, RISK_PROMPT, CHAT_PROMPT, TERM_EXPLANATION_PROMPT
+from app.rag.chain.prompts import CONTRACT_QA_PROMPT, RISK_PROMPT, CONTRACT_RISK_PROMPT, CHAT_PROMPT, TERM_EXPLANATION_PROMPT
 from app.rag.embedding.kure import KUREEmbeddings
-from app.rag.retriever.multi_retriever import search_collection, search_multi_index, async_search_multi_index
+from app.rag.retriever.multi_retriever import (
+    _deduplicate,
+    async_search_multi_index,
+    infer_law_statutes_filter,
+    search_collection,
+    search_multi_index,
+)
+from app.rag.retriever.query_expansion import expand_query_multi, async_expand_query_multi
+from app.rag.retriever.reranker import get_reranker
 from app.rag.vector_store.base import VectorDB
+
+@lru_cache(maxsize=1)
+def _get_token_encoder():
+    """tiktoken 인코더를 lazy하게 초기화 (최초 호출 시 다운로드)."""
+    return tiktoken.encoding_for_model("gpt-4o-mini")
+
+
+def _count_tokens(text: str) -> int:
+    return len(_get_token_encoder().encode(text))
 
 
 def build_context(documents: list[Document], max_length: int = 2000) -> str:
@@ -63,9 +82,12 @@ def rag_query(
     embeddings: KUREEmbeddings,
     llm: ChatOpenAI,
     collections: list[str],
-    k_per_collection: int = 3,
+    k_per_collection: int | dict[str, int] = 3,
+    use_query_expansion: bool = True,
+    use_reranker: bool = True,
+    rerank_top_n: int = 5,
 ) -> dict:
-    """Multi-Index RAG 파이프라인.
+    """Multi-Index RAG 파이프라인 (Query Expansion + Reranker).
 
     Args:
         question: 사용자 질문.
@@ -73,16 +95,41 @@ def rag_query(
         embeddings: 임베딩 모델.
         llm: ChatOpenAI 인스턴스.
         collections: 검색할 컬렉션 리스트.
-        k_per_collection: 컬렉션당 검색 수.
+        k_per_collection: 컬렉션당 검색 수. int 또는 {컬렉션명: k} 딕셔너리.
+        use_query_expansion: Multi-query 확장 사용 여부.
+        use_reranker: BGE CrossEncoder 재정렬 사용 여부.
+        rerank_top_n: reranker 후 반환할 최대 문서 수.
 
     Returns:
         {"answer": str, "source_documents": list, "context": str}
     """
-    docs = search_multi_index(
-        client, embeddings, question,
-        collections=collections,
-        k_per_collection=k_per_collection,
-    )
+    collection_filters = {}
+    law_statutes_filter = infer_law_statutes_filter(question)
+    if law_statutes_filter and "law_statutes" in collections:
+        collection_filters["law_statutes"] = law_statutes_filter
+
+    # 1. Query expansion: original + 2 variants
+    queries = expand_query_multi(question, llm, n=2) if use_query_expansion else [question]
+
+    # 2. 각 쿼리로 검색 후 합산
+    all_docs: list[Document] = []
+    for q in queries:
+        all_docs.extend(
+            search_multi_index(
+                client, embeddings, q,
+                collections=collections,
+                k_per_collection=k_per_collection,
+                collection_filters=collection_filters or None,
+            )
+        )
+
+    # 3. 중복 제거
+    docs = _deduplicate(all_docs)
+
+    # 4. Reranker: 원문 질문 기준으로 재정렬
+    if use_reranker and docs:
+        docs = get_reranker().rerank(question, docs, top_n=rerank_top_n)
+
     context = build_context(docs)
     prompt_text = CONTRACT_QA_PROMPT.format(context=context, question=question)
     with LLM_LATENCY.time():
@@ -124,9 +171,28 @@ def detect_risk(
         client, embeddings, user_clause, "special_clauses_normal", k=2,
         query_vector=query_vector,
     )
-    law_results = search_collection(
-        client, embeddings, user_clause, "law_database", k=2,
-        query_vector=query_vector,
+    law_statutes_filter = infer_law_statutes_filter(user_clause)
+    law_results = []
+    law_results.extend(
+        search_collection(
+            client,
+            embeddings,
+            user_clause,
+            "law_database",
+            k=2,
+            query_vector=query_vector,
+        )
+    )
+    law_results.extend(
+        search_collection(
+            client,
+            embeddings,
+            user_clause,
+            "law_statutes",
+            k=3,
+            filter_dict=law_statutes_filter,
+            query_vector=query_vector,
+        )
     )
 
     illegal_score = (
@@ -173,8 +239,112 @@ def detect_risk(
     }
 
 
+@traceable()
+async def detect_risk_contract(
+    user_clause: str,
+    client: VectorDB,
+    embeddings: KUREEmbeddings,
+    llm: ChatOpenAI,
+) -> dict:
+    """계약서 전문을 조항 단위로 분석하여 위험/주의/안전 분류 및 점수 반환.
+
+    Args:
+        user_clause: 계약서 전체 텍스트.
+        client: VectorDB 인스턴스.
+        embeddings: 임베딩 모델.
+        llm: ChatOpenAI 인스턴스.
+
+    Returns:
+        {
+          "overall_risk_score": int,
+          "risk_summary": {"Risk": int, "Caution": int, "Safety": int},
+          "total_clauses": int,
+          "clauses": [
+            {
+              "text": str,
+              "risk_level": "위험"|"주의"|"안전",
+              "category": str,
+              "analysis": str,
+              "related_law": str,
+              "score": int,
+            }
+          ]
+        }
+    """
+    # 계약서 대표 쿼리로 RAG 검색 (전체 텍스트가 길면 앞 500자 사용)
+    search_query = user_clause[:500]
+    query_vector = embeddings.embed_query(search_query)
+
+    illegal_results = search_collection(
+        client, embeddings, search_query, "special_clauses_illegal", k=5,
+        query_vector=query_vector,
+    )
+    normal_results = search_collection(
+        client, embeddings, search_query, "special_clauses_normal", k=3,
+        query_vector=query_vector,
+    )
+    law_statutes_filter = infer_law_statutes_filter(search_query)
+    law_results = search_collection(
+        client, embeddings, search_query, "law_database", k=3,
+        query_vector=query_vector,
+    )
+    law_results += search_collection(
+        client, embeddings, search_query, "law_statutes", k=3,
+        filter_dict=law_statutes_filter,
+        query_vector=query_vector,
+    )
+
+    illegal_text = "\n".join(
+        f"- ({d.metadata.get('category', '')}) {d.page_content}"
+        for d in illegal_results
+    ) or "해당 없음"
+
+    normal_text = "\n".join(
+        f"- ({d.metadata.get('category', '')}) {d.page_content}"
+        for d in normal_results
+    ) or "해당 없음"
+
+    law_text = "\n".join(d.page_content for d in law_results) or "관련 법률 없음"
+
+    _llm_start = time.perf_counter()
+    response = await llm.ainvoke(
+        CONTRACT_RISK_PROMPT.format(
+            contract_text=user_clause,
+            illegal_matches=illegal_text,
+            normal_matches=normal_text,
+            law_context=law_text,
+        )
+    )
+    LLM_LATENCY.observe(time.perf_counter() - _llm_start)
+
+    try:
+        result = json.loads(response.content)
+    except json.JSONDecodeError:
+        # JSON 파싱 실패 시 빈 결과 반환
+        return {
+            "overall_risk_score": 0,
+            "risk_summary": {"Risk": 0, "Caution": 0, "Safety": 0},
+            "total_clauses": 0,
+            "clauses": [],
+        }
+
+    # risk_summary가 없으면 clauses에서 계산
+    if "risk_summary" not in result:
+        clauses = result.get("clauses", [])
+        result["risk_summary"] = {
+            "Risk": sum(1 for c in clauses if c.get("risk_level") == "위험"),
+            "Caution": sum(1 for c in clauses if c.get("risk_level") == "주의"),
+            "Safety": sum(1 for c in clauses if c.get("risk_level") == "안전"),
+        }
+    if "total_clauses" not in result:
+        result["total_clauses"] = len(result.get("clauses", []))
+
+    return result
+
+
 _CHAT_COLLECTIONS = [
     "law_database",
+    "law_statutes",
     "contracts",
     "special_clauses_illegal",
     "special_clauses_normal",
@@ -190,7 +360,7 @@ async def chat_rag(
     llm: ChatOpenAI,
     contract_context: str | None = None,
     collections: list[str] | None = None,
-    k_per_collection: int = 2,
+    k_per_collection: int | dict[str, int] = 2,
 ) -> dict:
     """대화 이력을 포함한 RAG 챗봇 (병렬 검색).
 
@@ -203,7 +373,7 @@ async def chat_rag(
         llm: ChatOpenAI 인스턴스.
         contract_context: 사용자가 현재 보고 있는 계약서 텍스트 (선택).
         collections: 검색할 컬렉션 리스트. None이면 전체 4개 컬렉션 사용.
-        k_per_collection: 컬렉션당 검색 수.
+        k_per_collection: 컬렉션당 검색 수. int 또는 {컬렉션명: k} 딕셔너리.
 
     Returns:
         {"answer": str, "sources": list[str], "context": str}
@@ -211,14 +381,20 @@ async def chat_rag(
     if collections is None:
         collections = _CHAT_COLLECTIONS
 
+    collection_filters = {}
+    law_statutes_filter = infer_law_statutes_filter(message)
+    if law_statutes_filter and "law_statutes" in collections:
+        collection_filters["law_statutes"] = law_statutes_filter
+
     # 1. 병렬 RAG 검색
     docs = await async_search_multi_index(
         client, embeddings, message,
         collections=collections,
         k_per_collection=k_per_collection,
         score_threshold=0.3,  # 관련성 낮은 문서 제거
+        collection_filters=collection_filters or None,
     )
-    context = build_context(docs, max_length=3000)
+    context = build_context(docs, max_length=2000)
 
     # 계약서 컨텍스트가 있으면 앞에 붙임
     if contract_context:
@@ -282,11 +458,17 @@ async def explain_term_rag(
         {"simple_explanation": str, "legal_definition": str, "examples": list[str]}
     """
     search_query = " ".join(filter(None, [term, context, surrounding_text]))
+    collection_filters = {}
+    law_statutes_filter = infer_law_statutes_filter(search_query)
+    if law_statutes_filter:
+        collection_filters["law_statutes"] = law_statutes_filter
+
     docs = await async_search_multi_index(
         client, embeddings, search_query,
-        collections=["law_database"],
+        collections=["law_database", "law_statutes"],
         k_per_collection=4,
         score_threshold=0.3,
+        collection_filters=collection_filters or None,
     )
     law_context = build_context(docs, max_length=1500) or "관련 법률 문서를 찾을 수 없습니다."
 
@@ -337,9 +519,14 @@ class RagBot:
 
     @traceable()
     def retrieve_docs(self, question: str) -> list[Document]:
+        collection_filters = {}
+        law_statutes_filter = infer_law_statutes_filter(question)
+        if law_statutes_filter and "law_statutes" in self._collections:
+            collection_filters["law_statutes"] = law_statutes_filter
         return search_multi_index(
             self._qdrant_client, self._embeddings, question,
             collections=self._collections, k_per_collection=3,
+            collection_filters=collection_filters or None,
         )
 
     @traceable()
