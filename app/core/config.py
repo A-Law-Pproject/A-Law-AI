@@ -19,15 +19,7 @@ class Settings(BaseSettings):
     # Upstage API (OCR용)
     UPSTAGE_API_KEY: str = ""
 
-    # Vector DB 선택: "qdrant" (개발) | "pinecone" (배포)
-    VECTOR_DB: str = "qdrant"
-
-    # Qdrant (로컬/개발)
-    QDRANT_URL: str = "http://localhost:6333"
-    QDRANT_API_KEY: str | None = None
-    QDRANT_COLLECTION: str = "legal_documents"
-
-    # Pinecone (배포)
+    # Pinecone
     PINECONE_API_KEY: str = ""
     PINECONE_INDEX: str = "alaw-legal"
 

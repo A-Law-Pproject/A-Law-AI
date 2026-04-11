@@ -1,8 +1,7 @@
 """
 RAG 공유 싱글톤 의존성
 - VectorDB, KUREEmbeddings, ChatOpenAI 인스턴스를 앱 전체에서 재사용
-- VECTOR_DB=qdrant → QdrantAdapter (개발)
-- VECTOR_DB=pinecone → PineconeAdapter (배포)
+- VECTOR_DB=pinecone → PineconeAdapter
 """
 from loguru import logger
 from langchain_openai import ChatOpenAI
@@ -22,20 +21,12 @@ _mongo_client: AsyncIOMotorClient | None = None
 def get_vector_db() -> VectorDB:
     global _vector_db
     if _vector_db is None:
-        if settings.VECTOR_DB == "pinecone":
-            from app.rag.vector_store.pinecone_adapter import PineconeAdapter
-            _vector_db = PineconeAdapter(
-                api_key=settings.PINECONE_API_KEY,
-                index_name=settings.PINECONE_INDEX,
-            )
-            logger.info(f"VectorDB: Pinecone (index={settings.PINECONE_INDEX})")
-        else:
-            from app.rag.vector_store.qdrant_adapter import QdrantAdapter
-            _vector_db = QdrantAdapter(
-                url=settings.QDRANT_URL,
-                api_key=settings.QDRANT_API_KEY,
-            )
-            logger.info(f"VectorDB: Qdrant (url={settings.QDRANT_URL})")
+        from app.rag.vector_store.pinecone_adapter import PineconeAdapter
+        _vector_db = PineconeAdapter(
+            api_key=settings.PINECONE_API_KEY,
+            index_name=settings.PINECONE_INDEX,
+        )
+        logger.info(f"VectorDB: Pinecone (index={settings.PINECONE_INDEX})")
     return _vector_db
 
 

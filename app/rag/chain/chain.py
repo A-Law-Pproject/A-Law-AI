@@ -512,7 +512,7 @@ class RagBot:
         model: str = "gpt-4o-mini",
     ):
         self._openai_client = wrap_openai(openai.Client())
-        self._qdrant_client = client
+        self._vector_db = client
         self._embeddings = embeddings
         self._collections = collections
         self._model = model
@@ -524,7 +524,7 @@ class RagBot:
         if law_statutes_filter and "law_statutes" in self._collections:
             collection_filters["law_statutes"] = law_statutes_filter
         return search_multi_index(
-            self._qdrant_client, self._embeddings, question,
+            self._vector_db, self._embeddings, question,
             collections=self._collections, k_per_collection=3,
             collection_filters=collection_filters or None,
         )

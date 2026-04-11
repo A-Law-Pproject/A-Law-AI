@@ -3,7 +3,7 @@ Pinecone VectorDB 어댑터 (배포/프로덕션 환경)
 
 Pinecone 구조:
 - 인덱스 1개: PINECONE_INDEX (예: "alaw-legal")
-- namespace = Qdrant의 collection 이름
+- namespace = 컬렉션 구분자
   - law_database
   - contracts
   - special_clauses_illegal
