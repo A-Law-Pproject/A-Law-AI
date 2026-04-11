@@ -1,0 +1,919 @@
+{
+  "meta": {
+    "version": "1.0",
+    "created": "2026-04-03",
+    "description": "임대차 법률 RAG 챗봇 평가 데이터셋 — 사용자 작성 56개",
+    "source": "manual",
+    "total": 56
+  },
+  "questions": [
+    {
+      "id": "1",
+      "difficulty": "hard",
+      "question": "집주인 대신 소유자 부인과 임대차 계약을 체결해도 괜찮을까요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "배우자이므로 계약이 유효하다고 착각하기 쉽지만, 일상가사대리권은 임대차 계약에 적용되지 않습니다.",
+      "expected_answer": "위임장 없으면 계약이 무효가 될 위험이 있습니다.",
+      "expected_keywords": [
+        "위임장",
+        "인감증명서",
+        "대리권",
+        "무효"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "2",
+      "difficulty": "easy",
+      "question": "현재 보증금이 5천만 원인데, 집주인이 1천만 원을 올려달라고 합니다. 응해야 할까요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "임대료 인상은 5% 이내로만 가능하며, 5천만 원 기준 최대 250만 원까지만 올릴 수 있습니다.",
+      "expected_keywords": [
+        "5%",
+        "인상 상한",
+        "250만 원",
+        "주택임대차보호법"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "3",
+      "difficulty": "hard",
+      "question": "군 입대를 이유로 임대차 계약을 중도 해지할 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "군 입대가 불가항력적 사유로 인정받을 것 같지만, 주택임대차보호법상 법정 해지 사유가 아닙니다.",
+      "expected_answer": "군 입대는 법적 해지 사유에 해당하지 않아 원칙적으로 중도 해지가 불가능합니다.",
+      "expected_keywords": [
+        "중도해지",
+        "법정해지사유",
+        "군입대"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "4",
+      "difficulty": "hard",
+      "question": "보증금을 돌려받지 못했는데 이사를 나가도 되나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "보증금을 못 받아도 이사하면 괜찮다고 오해하기 쉽지만, 반드시 임차권등기명령 후 이동해야 합니다.",
+      "expected_answer": "임차권등기명령을 신청하고 등기 완료 후 이사해야 합니다. 그냥 나가면 대항력을 잃습니다.",
+      "expected_keywords": [
+        "임차권등기명령",
+        "대항력",
+        "보증금 반환"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "5",
+      "difficulty": "easy",
+      "question": "집을 산 새 집주인이 나가라고 하면 나가야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "계속 거주 가능합니다. 새 집주인은 기존 임대인의 지위를 승계합니다.",
+      "expected_keywords": [
+        "임대인 지위 승계",
+        "대항력",
+        "매매"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "6",
+      "difficulty": "easy",
+      "question": "전입신고가 늦어져 이미 저당권이 설정된 상태인데, 경매 시 보증금을 받을 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "저당권보다 후순위이므로 순위에 따라 배당받으며, 소액임차인에 해당하면 최우선변제가 가능합니다.",
+      "expected_keywords": [
+        "순위",
+        "소액임차인",
+        "최우선변제",
+        "저당권"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "7",
+      "difficulty": "easy",
+      "question": "경매가 진행될 때 보증금을 보호받으려면 어떻게 해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "대항요건(전입신고+점유)과 확정일자를 모두 갖춰야 우선변제권을 행사할 수 있습니다.",
+      "expected_keywords": [
+        "우선변제권",
+        "대항요건",
+        "확정일자",
+        "전입신고"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "8",
+      "difficulty": "easy",
+      "question": "사실혼 관계의 배우자가 사망하면 임차권을 승계받아 계속 거주할 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "사실혼 배우자도 임차권을 승계할 수 있으며, 2촌 이내 친족과 공동 승계할 수 있습니다.",
+      "expected_keywords": [
+        "사실혼",
+        "임차권 승계",
+        "사망"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "9",
+      "difficulty": "hard",
+      "question": "등기부상 집주인이 아닌 명의신탁자(진짜 실소유자)가 나가라고 하면 어떻게 해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "진짜 주인이라고 주장하는 사람의 말이 더 맞다고 느낄 수 있지만, 법적으로는 등기부 기준입니다.",
+      "expected_answer": "등기부상 소유자와 체결한 계약은 유효하므로 퇴거 요구를 거부할 수 있습니다.",
+      "expected_keywords": [
+        "명의신탁",
+        "등기부",
+        "계약 유효성"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "10",
+      "difficulty": "easy",
+      "question": "세입자가 자비로 집을 수리한 경우 집주인에게 비용을 청구할 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "상환 청구가 가능합니다. 필요비는 즉시, 유익비는 임대 종료 시 청구할 수 있습니다.",
+      "expected_keywords": [
+        "필요비",
+        "유익비",
+        "비용상환청구권"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "11",
+      "difficulty": "hard",
+      "question": "살고 있는 집이 압류된 경우 즉시 나가야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "압류되면 즉시 나가야 한다고 오해하기 쉽습니다.",
+      "expected_answer": "당장 퇴거할 필요 없습니다. 대항력이 있으면 경매 후에도 보호받을 수 있습니다.",
+      "expected_keywords": [
+        "압류",
+        "대항력",
+        "경매"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "12",
+      "difficulty": "easy",
+      "question": "계약 만료 전에 집주인과 세입자 모두 아무 말이 없었다면 어떻게 되나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "묵시적 갱신이 이루어져 동일 조건으로 2년 연장됩니다. 세입자는 언제든 해지 통보가 가능합니다.",
+      "expected_keywords": [
+        "묵시적 갱신",
+        "자동갱신",
+        "2년"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "13",
+      "difficulty": "hard",
+      "question": "임대료가 너무 올랐는데 감액 청구가 가능한가요? 계약서에 감액 금지 특약이 있어도 되나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "계약서에 특약이 있으면 무조건 따라야 한다고 오해하기 쉽습니다.",
+      "expected_answer": "특약에 상관없이 감액 청구가 가능합니다. 세입자에게 불리한 감액 금지 특약은 무효입니다.",
+      "expected_keywords": [
+        "감액청구",
+        "특약 무효",
+        "임대료"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "14",
+      "difficulty": "hard",
+      "question": "빈방 하나를 다른 사람에게 재임대(전차)하려면 집주인 동의가 필요한가요?",
+      "is_colloquial": true,
+      "is_trap": true,
+      "trap_explanation": "전체 전대는 동의 필요, 일부 전차는 예외라는 점이 트랩입니다.",
+      "expected_answer": "주택의 일부를 전차하는 경우에는 집주인 동의 없이도 가능합니다.",
+      "expected_keywords": [
+        "전차",
+        "전대",
+        "동의",
+        "일부"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "15",
+      "difficulty": "hard",
+      "question": "보증금 증액분도 보호받으려면 어떻게 해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "기존 확정일자가 있으면 자동으로 적용된다고 오해하기 쉽습니다.",
+      "expected_answer": "증액된 계약서에 별도로 확정일자를 다시 받아야 합니다.",
+      "expected_keywords": [
+        "확정일자",
+        "증액",
+        "보증금"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "16",
+      "difficulty": "hard",
+      "question": "계약 기간을 1년으로 정했는데 효력이 어떻게 되나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "1년 계약이 그대로 유효하다고 착각할 수 있습니다.",
+      "expected_answer": "세입자는 1년 또는 2년 중 선택하여 주장할 수 있으며 최소 2년을 보장받습니다.",
+      "expected_keywords": [
+        "2년 보장",
+        "최단 기간",
+        "1년 계약"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "17",
+      "difficulty": "hard",
+      "question": "현관문 호수와 등기부 등재 호수가 다를 때 어떻게 전입신고해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "눈에 보이는 현관 호수로 신고해도 된다고 오해하기 쉽습니다.",
+      "expected_answer": "등기부 기준으로 전입신고해야 합니다. 다를 경우 법적 보호를 전혀 받을 수 없습니다.",
+      "expected_keywords": [
+        "전입신고",
+        "등기부 호수",
+        "대항력 상실"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "18",
+      "difficulty": "hard",
+      "question": "보증금을 못 받고 계속 거주하는 경우 월세를 내야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "보증금을 못 받았으니 월세도 안 내도 된다고 오해할 수 있습니다.",
+      "expected_answer": "거주하며 얻는 이익에 대한 비용을 지불해야 하므로 월세 지불 의무가 있습니다.",
+      "expected_keywords": [
+        "월세 지불 의무",
+        "부당이득",
+        "보증금"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "19",
+      "difficulty": "hard",
+      "question": "방이 딸린 슈퍼(상가)에 실제로 거주하는 경우 주택임대차보호법의 보호를 받을 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "상가이므로 주택임대차법이 적용 안 된다고 오해하기 쉽습니다.",
+      "expected_answer": "실질적으로 주거용으로 사용하는 경우 주택임대차보호법이 적용될 수 있습니다.",
+      "expected_keywords": [
+        "주택임대차보호법",
+        "상가",
+        "실질 주거"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "20",
+      "difficulty": "hard",
+      "question": "아파트 관리비에 포함된 장기수선충당금은 누가 내야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "세입자가 관리비로 이미 납부했지만 집주인 부담임을 모르는 경우가 많습니다.",
+      "expected_answer": "장기수선충당금은 집주인이 부담해야 하며, 이사 시 집주인에게 정산받아야 합니다.",
+      "expected_keywords": [
+        "장기수선충당금",
+        "관리비",
+        "정산"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "21",
+      "difficulty": "easy",
+      "question": "보일러가 고장났을 때 수리비는 누가 내야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "보일러 수리비는 집주인이 부담해야 합니다. 임대인은 세입자가 사용·수익할 수 있는 상태를 유지할 의무가 있습니다.",
+      "expected_keywords": [
+        "보일러",
+        "수선의무",
+        "임대인 의무"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "22",
+      "difficulty": "hard",
+      "question": "소유자 부인과 임대차 계약 시 위임장이 없다면 계약은 유효한가요?",
+      "is_colloquial": true,
+      "is_trap": true,
+      "trap_explanation": "부부간 일상가사대리권이 임대차에도 적용된다고 착각하기 쉽습니다.",
+      "expected_answer": "계약 무효 위험이 있습니다. 일상가사대리권은 임대차계약에 적용되지 않으므로 위임장과 인감증명서가 반드시 필요합니다.",
+      "expected_keywords": [
+        "일상가사대리권",
+        "위임장",
+        "인감증명서",
+        "계약 무효"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "23",
+      "difficulty": "hard",
+      "question": "2020년 12월 10일 이후 갱신된 계약의 계약갱신요구권 행사 기간은 언제인가요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "정확한 날짜 계산에서 초일산입 여부를 헷갈리기 쉽습니다.",
+      "expected_answer": "만료 6개월 전부터 2개월 전 사이에 행사해야 하며, 초일불산입 원칙이 적용됩니다.",
+      "expected_keywords": [
+        "갱신요구권",
+        "6개월 전",
+        "2개월 전",
+        "초일불산입"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "24",
+      "difficulty": "hard",
+      "question": "묵시적 갱신으로 4년을 거주한 경우 계약갱신요구권을 사용할 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "묵시적 갱신도 갱신권을 소진한 것으로 오해하기 쉽습니다.",
+      "expected_answer": "묵시적 갱신은 계약갱신요구권 행사로 보지 않으므로 아직 1회 행사가 가능하며, 총 6년 거주가 가능합니다.",
+      "expected_keywords": [
+        "묵시적 갱신",
+        "갱신요구권",
+        "횟수"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "25",
+      "difficulty": "hard",
+      "question": "갱신권을 사용하지 않겠다는 특약을 계약서에 쓴 경우 효력이 있나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "계약서에 서명했으니 무조건 유효하다고 오해하기 쉽습니다.",
+      "expected_answer": "임차인에게 불리한 특약은 무효입니다. 해당 특약이 있어도 갱신권을 행사할 수 있습니다.",
+      "expected_keywords": [
+        "특약 무효",
+        "갱신요구권",
+        "임차인 보호"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "26",
+      "difficulty": "medium",
+      "question": "나가겠다고 했다가 마음이 바뀐 경우, 갱신요구권을 행사할 수 있나요?",
+      "is_colloquial": true,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "아직 행사 기간(만료 6~2개월 전) 내라면 갱신권을 행사할 수 있습니다.",
+      "expected_keywords": [
+        "갱신요구권",
+        "의사 번복",
+        "기간 내 행사"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "27",
+      "difficulty": "medium",
+      "question": "집주인이 본인이 직접 거주하겠다며 갱신을 거절하면 나가야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "실거주는 정당한 갱신 거절 사유이며, 본인 및 직계존비속(부모, 자녀)의 실거주도 해당됩니다.",
+      "expected_keywords": [
+        "실거주",
+        "갱신 거절",
+        "직계존비속"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "28",
+      "difficulty": "medium",
+      "question": "집주인이 실거주 이유로 퇴거를 요구했으나 실제로는 비워두거나 공사 중인 경우 어떻게 되나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "손해배상 청구가 가능합니다. 제3자에게 임대 시 법정배상, 공실 방치 시 민법상 배상을 받을 수 있습니다.",
+      "expected_keywords": [
+        "허위 실거주",
+        "손해배상",
+        "공실"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "29",
+      "difficulty": "medium",
+      "question": "집주인이 정말 실거주하는지 확인할 방법이 있나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "임대차 정보 열람권을 행사하면 확정일자 및 전입세대 내역을 열람할 수 있습니다.",
+      "expected_keywords": [
+        "임대차 정보 열람권",
+        "전입세대",
+        "확정일자"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "30",
+      "difficulty": "medium",
+      "question": "집주인의 허위 실거주가 적발된 경우 배상받을 수 있는 금액은 얼마인가요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "3개월 월세 또는 차액 2년분 중 큰 금액을 선택하여 청구할 수 있으며, 실제 손해액도 청구 가능합니다.",
+      "expected_keywords": [
+        "손해배상",
+        "3개월 월세",
+        "2년 차액"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "31",
+      "difficulty": "hard",
+      "question": "갱신요구권 행사 후 이사를 가고 싶을 때 어떻게 해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "통보하면 즉시 효력이 발생한다고 오해하기 쉽습니다.",
+      "expected_answer": "언제든지 해지 통보가 가능하며, 통보 후 3개월이 경과하면 효력이 발생합니다. 3개월간 월세와 관리비는 부담해야 합니다.",
+      "expected_keywords": [
+        "중도해지",
+        "3개월",
+        "해지 통보"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "32",
+      "difficulty": "medium",
+      "question": "집주인이 5%를 초과한 인상분을 요구하며 협박하는 경우 어떻게 해야 하나요?",
+      "is_colloquial": true,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "5% 이내에서만 협의를 거부할 수 있으며, 합의가 안 될 경우 조세·공과금 증감 등을 입증해야 합니다.",
+      "expected_keywords": [
+        "임대료 상한",
+        "5%",
+        "협박",
+        "거부"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "33",
+      "difficulty": "hard",
+      "question": "실수로 10% 인상에 동의한 계약서를 작성했다면 초과분을 돌려받을 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "서명한 계약이므로 효력이 있다고 오해하기 쉽습니다.",
+      "expected_answer": "강행규정 위반으로 초과 부분(5% 초과분)은 무효이므로 반환 청구가 가능합니다.",
+      "expected_keywords": [
+        "강행규정",
+        "5% 초과",
+        "반환청구",
+        "무효"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "34",
+      "difficulty": "medium",
+      "question": "집주인이 전세를 월세로 바꾸자고 할 때 동의해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "임차인 동의 없이는 전월세 전환이 불가능하며, 전환 시에도 법정 전환율(현 2.5% 수준)이 적용됩니다.",
+      "expected_keywords": [
+        "전월세 전환",
+        "법정전환율",
+        "동의"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "35",
+      "difficulty": "medium",
+      "question": "지자체가 임대료 상한을 5%보다 낮게 정한 경우 어떤 상한이 적용되나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "지자체 조례로 정한 상한(예: 4%)이 적용됩니다.",
+      "expected_keywords": [
+        "조례",
+        "임대료 상한",
+        "지자체"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "36",
+      "difficulty": "hard",
+      "question": "1년으로 계약했는데 1년 후에도 더 살고 싶을 때 법적으로 가능한가요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "1년 계약이므로 1년 후 나가야 한다고 오해하기 쉽습니다.",
+      "expected_answer": "2년 미만 계약은 법상 2년으로 간주하므로 2년까지는 당연히 거주할 수 있습니다.",
+      "expected_keywords": [
+        "2년 간주",
+        "최단 기간",
+        "1년 계약"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "37",
+      "difficulty": "medium",
+      "question": "보일러·누수 등 수리를 집주인이 거부하면 어떻게 해야 하나요?",
+      "is_colloquial": true,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "세입자가 직접 수리 후 비용을 청구하거나 월세에서 차감할 수 있습니다. (민법 제623조)",
+      "expected_keywords": [
+        "수선의무",
+        "비용청구",
+        "월세 차감",
+        "민법 제623조"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "38",
+      "difficulty": "medium",
+      "question": "아파트 관리비에 포함된 장기수선충당금, 이사 시 어떻게 처리하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "관리실에서 납부확인서를 발급받아 이사 시 집주인에게 환급 요청할 수 있습니다.",
+      "expected_keywords": [
+        "장기수선충당금",
+        "납부확인서",
+        "환급"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "39",
+      "difficulty": "medium",
+      "question": "거주 중인 집이 팔려 새 집주인이 생긴 경우 계약 조건이 바뀌나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "기존 계약 조건이 그대로 승계되며, 새 집주인에게도 갱신요구권 행사가 가능합니다.",
+      "expected_keywords": [
+        "임대인 지위 승계",
+        "매매",
+        "갱신요구권"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "40",
+      "difficulty": "medium",
+      "question": "보증금을 받지 못했는데 집주인이 열쇠를 반납하라고 할 때 어떻게 해야 하나요?",
+      "is_colloquial": true,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "동시이행항변권을 근거로 거부할 수 있습니다. 보증금을 받을 때까지 집을 비워줄 의무가 없습니다.",
+      "expected_keywords": [
+        "동시이행항변권",
+        "보증금 반환",
+        "열쇠 반납"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "41",
+      "difficulty": "hard",
+      "question": "계약이 끝났는데 집주인이 보증금이 없다며 반환하지 않으면 어떻게 해야 하나요?",
+      "is_colloquial": true,
+      "is_trap": true,
+      "trap_explanation": "등기를 신청하면 바로 이사해도 된다고 오해하기 쉽습니다.",
+      "expected_answer": "임차권등기명령을 신청하고, 등기 완료를 확인한 후에 이사해야 합니다. 등기 전에 주소를 옮기면 절대 안 됩니다.",
+      "expected_keywords": [
+        "임차권등기명령",
+        "보증금 반환",
+        "대항력"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "42",
+      "difficulty": "hard",
+      "question": "재건축을 이유로 나가라는 요구에 무조건 응해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "재건축은 무조건 나가야 하는 사유라고 오해하기 쉽습니다.",
+      "expected_answer": "재건축 계획을 계약 시점에 고지한 경우에만 정당한 거절 사유가 됩니다.",
+      "expected_keywords": [
+        "재건축",
+        "갱신 거절",
+        "고지 의무"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "43",
+      "difficulty": "hard",
+      "question": "전입신고 주소가 실제 거주 호수와 다르다면 어떻게 해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": true,
+      "trap_explanation": "전입신고만 되어 있으면 호수가 달라도 괜찮다고 오해하기 쉽습니다.",
+      "expected_answer": "즉시 정정해야 합니다. 다세대주택이나 아파트에서 호수가 다르면 법적 보호를 받지 못합니다.",
+      "expected_keywords": [
+        "전입신고 오류",
+        "호수 불일치",
+        "대항력 상실"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "44",
+      "difficulty": "medium",
+      "question": "혼인신고를 하지 않은 배우자가 사망한 경우 임차권을 승계받을 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "사실혼 배우자는 임차권을 승계받을 수 있으며, 상속인과 공동 또는 단독으로 승계합니다.",
+      "expected_keywords": [
+        "사실혼",
+        "임차권 승계",
+        "상속인"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "45",
+      "difficulty": "easy",
+      "question": "임대차 계약 전 등기부에서 꼭 확인해야 할 사항은 무엇인가요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "소유권 및 저당권 유무를 반드시 확인하여 권리관계를 파악해야 합니다.",
+      "expected_keywords": [
+        "등기부",
+        "소유권",
+        "저당권",
+        "권리관계"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "46",
+      "difficulty": "easy",
+      "question": "집주인이 직접 오지 않고 대리인이 계약할 때 무엇을 요구해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "위임장과 인감증명서를 반드시 요구해야 합니다.",
+      "expected_keywords": [
+        "위임장",
+        "인감증명서",
+        "대리인"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "47",
+      "difficulty": "easy",
+      "question": "공인중개사는 어떤 책임을 지나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "중개대상물 설명 의무를 위반한 경우 책임을 집니다.",
+      "expected_keywords": [
+        "공인중개사",
+        "설명의무",
+        "책임"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "48",
+      "difficulty": "easy",
+      "question": "보증금을 안전하게 보호받으려면 입주 시 무엇을 해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "주택 인도, 전입신고, 확정일자를 모두 갖춰야 대항력 및 우선변제권을 즉시 취득합니다.",
+      "expected_keywords": [
+        "대항력",
+        "우선변제권",
+        "전입신고",
+        "확정일자"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "49",
+      "difficulty": "easy",
+      "question": "전월세 신고제는 무엇이고 언제까지 신고해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "계약 체결 후 30일 이내에 신고해야 하는 의무 제도입니다.",
+      "expected_keywords": [
+        "전월세신고제",
+        "30일",
+        "신고 의무"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "50",
+      "difficulty": "easy",
+      "question": "집 수리 비용을 누가 내야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "임대인은 임차인이 사용·수익할 수 있는 적합한 상태를 유지할 의무가 있으므로 집주인이 부담합니다.",
+      "expected_keywords": [
+        "수선의무",
+        "임대인 부담",
+        "비용상환"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "51",
+      "difficulty": "easy",
+      "question": "월세를 연체하면 어떻게 되나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "2기(2회) 이상 차임을 연체하면 집주인이 계약 해지를 요구할 수 있습니다.",
+      "expected_keywords": [
+        "월세 연체",
+        "2기",
+        "계약 해지"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "52",
+      "difficulty": "easy",
+      "question": "임차한 집 전부를 다른 사람에게 빌려주려면 어떻게 해야 하나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "임대인의 동의 없이 전대차는 금지됩니다.",
+      "expected_keywords": [
+        "전대차",
+        "임대인 동의",
+        "금지"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "53",
+      "difficulty": "easy",
+      "question": "보증금을 받지 못한 상태에서 이사하면 어떻게 되나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "임차권등기명령 신청 후 등기를 완료해야 대항력을 유지하며 이사할 수 있습니다.",
+      "expected_keywords": [
+        "임차권등기명령",
+        "대항력",
+        "보증금 미반환"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "54",
+      "difficulty": "easy",
+      "question": "이사 갈 때 세입자가 설치한 부속물을 떼어 가도 되나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "부속물매수청구권을 행사하거나 원상복구 의무를 이행하면 됩니다.",
+      "expected_keywords": [
+        "부속물매수청구권",
+        "원상복구",
+        "이사"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "55",
+      "difficulty": "easy",
+      "question": "임차인이 사망했을 때 사실혼 배우자는 임차권을 이어받을 수 있나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "임차인 사망 시 사실혼 배우자도 임차권 승계가 인정됩니다.",
+      "expected_keywords": [
+        "사실혼",
+        "임차권 승계",
+        "사망"
+      ],
+      "relevant_law": [],
+      "category": ""
+    },
+    {
+      "id": "56",
+      "difficulty": "easy",
+      "question": "경매로 집이 넘어갔을 때 소액임차인은 어떤 보호를 받나요?",
+      "is_colloquial": false,
+      "is_trap": false,
+      "trap_explanation": null,
+      "expected_answer": "최우선변제권을 통해 일정 금액을 우선적으로 보호받을 수 있습니다.",
+      "expected_keywords": [
+        "소액임차인",
+        "최우선변제권",
+        "경매"
+      ],
+      "relevant_law": [],
+      "category": ""
+    }
+  ]
+}

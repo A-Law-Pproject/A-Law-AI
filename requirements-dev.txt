@@ -8,3 +8,9 @@ flake8>=7.0.0
 
 # Load Testing
 locust>=2.31.0
+
+# Evaluation
+ragas>=0.2.0
+
+# Offline data loading
+xlrd>=2.0.1

@@ -14,7 +14,6 @@ page_content 구성:
 
 from pathlib import Path
 
-import xlrd
 from langchain_core.documents import Document
 from loguru import logger
 
@@ -34,7 +33,12 @@ def load_precedents(file_path: str | Path) -> list[Document]:
         return []
 
     try:
+        import xlrd
+
         wb = xlrd.open_workbook(str(file_path), encoding_override="cp949")
+    except ImportError:
+        logger.error("[판례] xlrd 패키지가 설치되지 않았습니다. requirements-dev.txt를 설치하세요.")
+        return []
     except Exception as e:
         logger.error(f"[판례] XLS 열기 실패: {e}")
         return []

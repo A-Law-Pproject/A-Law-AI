@@ -32,6 +32,7 @@ from app.rag.embedding.kure import KUREEmbeddings
 from app.rag.vector_store.pinecone_adapter import PineconeAdapter
 from app.rag.data_loader.special_clause_loader import parse_illegal_clauses, parse_normal_clauses
 from app.rag.data_loader.jsonl_loader import load_jsonl_documents
+from app.rag.data_loader.doc_loader import load_doc_dir
 
 BATCH_SIZE = 100
 
@@ -124,6 +125,16 @@ def main():
         )
     else:
         logger.warning(f"디렉토리 없음: {law_dir}")
+
+    # 4. 법률 원문 .doc (주택임대차보호법, 공인중개사법 등)
+    doc_law_dir = DATA_DIR / "raw" / "학습법률문서" / "법률"
+    if doc_law_dir.exists():
+        doc_law_docs = load_doc_dir(doc_law_dir)
+        results["law_database(doc)"] = upload_namespace(
+            adapter, embeddings, "law_database", doc_law_docs
+        )
+    else:
+        logger.warning(f"디렉토리 없음: {doc_law_dir}")
 
     logger.info("=== 업로드 완료 ===")
     for ns, count in results.items():
