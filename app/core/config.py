@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     
     # MongoDB (OCR 결과 저장소 - Atlas)
     MONGODB_URI: str = "mongodb+srv://mongoadmin:alaw@cluster0.t0cklix.mongodb.net/?appName=Cluster0"
-    MONGODB_DB: str = "admin"
+    MONGODB_DB: str = "alaw"
     MONGODB_OCR_COLLECTION: str = "ocr_results"
 
     # RabbitMQ (Spring Boot 인프라 연결)
