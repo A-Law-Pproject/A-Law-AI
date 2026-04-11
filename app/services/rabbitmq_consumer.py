@@ -209,11 +209,14 @@ class RabbitMQConsumer:
             text = await fetch_ocr_text(request.s3_key)
             logger.info(f"[Consumer] 텍스트 조회 완료: {len(text)}자")
 
-            # 2. 요약 + Risk 분석 병렬 실행
+            # 2. 요약 + Risk 분석 병렬 실행 (타임아웃 적용)
             logger.info(f"[Consumer] 병렬 분석 시작 (요약 + Risk)")
-            summary_result, risk_analysis_result = await asyncio.gather(
-                self._perform_summary(text),
-                self._perform_risk_analysis(text),
+            summary_result, risk_analysis_result = await asyncio.wait_for(
+                asyncio.gather(
+                    self._perform_summary(text),
+                    self._perform_risk_analysis(text),
+                ),
+                timeout=settings.ANALYSIS_TIMEOUT,
             )
             logger.info(f"[Consumer] 병렬 분석 완료")
 

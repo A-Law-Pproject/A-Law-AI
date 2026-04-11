@@ -10,6 +10,7 @@ CrossEncoder는 (query, document) 쌍을 직접 평가하므로 컬렉션 간 sc
 - sentence-transformers CrossEncoder API 사용
 """
 import asyncio
+import threading
 
 from langchain_core.documents import Document
 from loguru import logger
@@ -64,10 +65,13 @@ class BGEReranker:
 
 
 _reranker_instance: BGEReranker | None = None
+_reranker_lock = threading.Lock()
 
 
 def get_reranker(model_name: str = "BAAI/bge-reranker-v2-m3") -> BGEReranker:
     global _reranker_instance
     if _reranker_instance is None:
-        _reranker_instance = BGEReranker(model_name)
+        with _reranker_lock:
+            if _reranker_instance is None:
+                _reranker_instance = BGEReranker(model_name)
     return _reranker_instance

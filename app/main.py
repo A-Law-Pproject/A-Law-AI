@@ -50,7 +50,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_sch
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=["https://www.a-law.site", "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
