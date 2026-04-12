@@ -210,14 +210,15 @@ class RabbitMQConsumer:
             text = await fetch_ocr_text(request.s3_key)
             logger.info(f"[Consumer] 텍스트 조회 완료: {len(text)}자")
 
-            # 2. 요약 + Risk 분석 병렬 실행 (타임아웃 적용)
+            # 2. 요약 + Risk 분석 병렬 실행
+            # wait_for를 사용하지 않는 이유:
+            # asyncio.to_thread 작업은 타임아웃으로 코루틴이 CancelledError를 받아도
+            # 내부 OS 스레드가 멈추지 않아 스레드 풀이 고갈됨.
+            # 대신 ChatOpenAI(timeout=...) 로 OpenAI 호출 단위에서 타임아웃을 제어함.
             logger.info(f"[Consumer] 병렬 분석 시작 (요약 + Risk)")
-            summary_result, risk_analysis_result = await asyncio.wait_for(
-                asyncio.gather(
-                    self._perform_summary(text),
-                    self._perform_risk_analysis(text),
-                ),
-                timeout=settings.ANALYSIS_TIMEOUT,
+            summary_result, risk_analysis_result = await asyncio.gather(
+                self._perform_summary(text),
+                self._perform_risk_analysis(text),
             )
             logger.info(f"[Consumer] 병렬 분석 완료")
 
@@ -319,35 +320,25 @@ class RabbitMQConsumer:
                 logger.warning(f"[Consumer] RAG 미초기화 - 기본 요약 사용: {e}")
                 return self._basic_summary(text)
 
-            # RAG 질의를 통한 요약
-            summary_questions = [
-                "이 계약서의 주요 조건은 무엇인가요? (임대료, 보증금, 계약기간 등)",
-                "이 계약서에서 임차인이 주의해야 할 중요한 사항은 무엇인가요?",
-                "특약사항이나 특이사항이 있다면 무엇인가요?"
-            ]
-
-            # RAG 질의 3개 병렬 실행
-            async def _query(question: str):
-                return await asyncio.to_thread(
-                    rag_query,
-                    question=f"{question}\n\n계약서 내용:\n{text[:2000]}",
-                    client=db,
-                    embeddings=embeddings,
-                    llm=llm,
-                    collections=["law_database"],
-                    k_per_collection=2,
-                )
-
-            results = await asyncio.gather(
-                *[_query(q) for q in summary_questions],
-                return_exceptions=True
+            # 3개 질문을 하나의 RAG 호출로 통합
+            combined_question = (
+                "아래 계약서를 분석하여 다음 세 가지를 답하세요.\n"
+                "1. 주요 조건 (임대료, 보증금, 계약기간 등)\n"
+                "2. 임차인이 주의해야 할 사항\n"
+                "3. 특약사항 및 특이사항\n\n"
+                f"계약서 내용:\n{text[:2000]}"
             )
-            key_points = []
-            for question, result in zip(summary_questions, results):
-                if isinstance(result, Exception):
-                    logger.error(f"[Consumer] RAG 질의 실패: {result}")
-                    continue
-                key_points.append({"question": question, "answer": result["answer"]})
+            rag_result = await asyncio.to_thread(
+                rag_query,
+                question=combined_question,
+                client=db,
+                embeddings=embeddings,
+                llm=llm,
+                collections=["law_database"],
+                k_per_collection=3,
+                use_query_expansion=False,
+            )
+            key_points = [{"answer": rag_result["answer"]}]
 
             # 기본 정보 추출
             basic_info = self._extract_basic_info(text)
