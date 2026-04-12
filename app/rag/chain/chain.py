@@ -1,4 +1,6 @@
+import asyncio
 import json
+import re
 import time
 import tiktoken
 from functools import lru_cache
@@ -273,26 +275,36 @@ async def detect_risk_contract(
     """
     # 계약서 대표 쿼리로 RAG 검색 (전체 텍스트가 길면 앞 500자 사용)
     search_query = user_clause[:500]
-    query_vector = embeddings.embed_query(search_query)
+    # SentenceTransformer는 CPU 집약적이므로 스레드 풀에서 실행
+    query_vector = await asyncio.to_thread(embeddings.embed_query, search_query)
 
-    illegal_results = search_collection(
-        client, embeddings, search_query, "special_clauses_illegal", k=5,
-        query_vector=query_vector,
-    )
-    normal_results = search_collection(
-        client, embeddings, search_query, "special_clauses_normal", k=3,
-        query_vector=query_vector,
-    )
     law_statutes_filter = infer_law_statutes_filter(search_query)
-    law_results = search_collection(
-        client, embeddings, search_query, "law_database", k=3,
-        query_vector=query_vector,
+
+    # 4개 컬렉션 병렬 검색 (각각 Pinecone 네트워크 I/O → 스레드 풀 병렬화)
+    (
+        illegal_results,
+        normal_results,
+        law_db_results,
+        law_statutes_results,
+    ) = await asyncio.gather(
+        asyncio.to_thread(
+            search_collection, client, embeddings, search_query,
+            "special_clauses_illegal", 5, None, 0.0, query_vector,
+        ),
+        asyncio.to_thread(
+            search_collection, client, embeddings, search_query,
+            "special_clauses_normal", 3, None, 0.0, query_vector,
+        ),
+        asyncio.to_thread(
+            search_collection, client, embeddings, search_query,
+            "law_database", 3, None, 0.0, query_vector,
+        ),
+        asyncio.to_thread(
+            search_collection, client, embeddings, search_query,
+            "law_statutes", 3, law_statutes_filter, 0.0, query_vector,
+        ),
     )
-    law_results += search_collection(
-        client, embeddings, search_query, "law_statutes", k=3,
-        filter_dict=law_statutes_filter,
-        query_vector=query_vector,
-    )
+    law_results = law_db_results + law_statutes_results
 
     illegal_text = "\n".join(
         f"- ({d.metadata.get('category', '')}) {d.page_content}"
@@ -318,8 +330,13 @@ async def detect_risk_contract(
     LLM_LATENCY.observe(time.perf_counter() - _llm_start)
 
     try:
-        result = json.loads(response.content)
-    except json.JSONDecodeError:
+        content = response.content.strip()
+        # GPT-4o가 ```json ... ``` 마크다운 펜스로 감싸는 경우 제거
+        if content.startswith("```"):
+            content = re.sub(r'^```(?:json)?\s*\n?', '', content)
+            content = re.sub(r'\n?```\s*$', '', content.strip())
+        result = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
         # JSON 파싱 실패 시 빈 결과 반환
         return {
             "overall_risk_score": 0,

@@ -5,7 +5,7 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from pydantic.alias_generators import to_camel
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -112,7 +112,7 @@ class ContractAnalysisResult(BaseModel):
 
     # 메타데이터
     processing_time_ms: int = Field(default=0, alias="processingTimeMs")
-    completed_at: datetime = Field(default_factory=datetime.now, alias="completedAt")
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), alias="completedAt")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
 
     class Config:
