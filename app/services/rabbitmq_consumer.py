@@ -179,8 +179,9 @@ class RabbitMQConsumer:
         contract_id = 0
         try:
             body = json.loads(message.body.decode())
-            job_id = body.get("job_id") or "unknown"
-            contract_id = body.get("contract_id") or 0
+            # Spring Boot는 camelCase(jobId)로 발행, snake_case(job_id)도 허용
+            job_id = body.get("jobId") or "unknown"
+            contract_id = body.get("contractId") or 0
             logger.info(f"[Consumer] 수신: job_id={job_id}, contract_id={contract_id}")
 
             request = ContractAnalysisRequest(**body)
