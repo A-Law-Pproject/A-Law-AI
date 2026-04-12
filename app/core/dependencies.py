@@ -3,6 +3,7 @@ RAG 공유 싱글톤 의존성
 - VectorDB, KUREEmbeddings, ChatOpenAI 인스턴스를 앱 전체에서 재사용
 - VECTOR_DB=pinecone → PineconeAdapter
 """
+import certifi
 from loguru import logger
 from langchain_openai import ChatOpenAI
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -53,7 +54,13 @@ def get_llm() -> ChatOpenAI:
 def get_mongo_client() -> AsyncIOMotorClient:
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
+        _mongo_client = AsyncIOMotorClient(
+            settings.MONGODB_URI,
+            serverSelectionTimeoutMS=5000,   # 서버 선택 타임아웃 5초
+            connectTimeoutMS=5000,           # 연결 타임아웃 5초
+            socketTimeoutMS=5000,            # 소켓 타임아웃 5초
+            tlsCAFile=certifi.where(),       # CA 인증서 명시 (Atlas TLS 검증)
+        )
         logger.info("MongoDB 싱글톤 초기화 완료")
     return _mongo_client
 

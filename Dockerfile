@@ -30,6 +30,7 @@ RUN apt-get update && \
     libgomp1 \
     libglib2.0-0 \
     libgl1 \
+    ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
