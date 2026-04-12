@@ -195,8 +195,8 @@ class RabbitMQConsumer:
             await self._publish_error(job_id, contract_id, f"Invalid JSON: {e}")
 
         except Exception as e:
-            logger.error(f"[Consumer] Processing error: {e}")
-            await self._publish_error(job_id, contract_id, str(e))
+            logger.exception(f"[Consumer] Processing error: {type(e).__name__}: {e}")
+            await self._publish_error(job_id, contract_id, f"{type(e).__name__}: {e}")
 
 
     async def _process_analysis(self, request: ContractAnalysisRequest) -> ContractAnalysisResult:
@@ -271,10 +271,12 @@ class RabbitMQConsumer:
                 risk_summary = risk_analysis_result.get("risk_summary", {})
                 clauses = risk_analysis_result["clauses"]
                 total = len(clauses)
+                # JSON null → None 대비: or 0 으로 안전하게 처리
+                raw_score = float(risk_analysis_result.get("overall_risk_score") or 0)
                 result.risk_analysis = RiskAnalysisResult(
                     total_clauses=total,
-                    overall_risk_score=float(risk_analysis_result.get("overall_risk_score", 0)),
-                    overall_risk_level=self._overall_risk_level(float(risk_analysis_result.get("overall_risk_score", 0))),
+                    overall_risk_score=raw_score,
+                    overall_risk_level=self._overall_risk_level(raw_score),
                     risk_count=risk_summary.get("Risk", 0),
                     caution_count=risk_summary.get("Caution", 0),
                     safety_count=risk_summary.get("Safety", 0),
@@ -299,7 +301,7 @@ class RabbitMQConsumer:
             return result
 
         except Exception as e:
-            logger.error(f"[Consumer] Analysis error: {e}")
+            logger.exception(f"[Consumer] Analysis error: {type(e).__name__}: {e}")
             raise
 
     async def _perform_summary(self, text: str) -> dict:
@@ -485,8 +487,8 @@ class RabbitMQConsumer:
     async def _publish_result(self, result: ContractAnalysisResult):
         """결과 메시지 발행"""
         if not self.result_exchange:
-            logger.error("[Consumer] Result exchange not initialized")
-            return
+            # return 대신 raise — 메시지를 NACK해서 재시도 가능하게 함
+            raise RuntimeError("[Consumer] Result exchange not initialized — cannot publish result")
 
         message = Message(
             body=json.dumps(result.to_rabbitmq_message()).encode(),
