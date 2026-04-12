@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.routers import api_router
 from app.services.rabbitmq_consumer import start_consumer, stop_consumer, consumer
+from app.core.dependencies import get_vector_db, get_embeddings, get_llm
 from loguru import logger
 
 
@@ -24,7 +25,16 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI Lifespan - RabbitMQ Consumer 시작/종료"""
+    """FastAPI Lifespan - 싱글톤 워밍업 → RabbitMQ Consumer 시작/종료"""
+    # KUREEmbeddings는 SentenceTransformer 모델 로딩(~8초)이 필요하므로
+    # 첫 요청에서 이벤트 루프를 블로킹하지 않도록 앱 시작 시 미리 초기화
+    logger.info("Initializing singletons (VectorDB, Embeddings, LLM)...")
+    import asyncio
+    get_vector_db()                                         # Pinecone 연결
+    await asyncio.to_thread(get_embeddings)                 # SentenceTransformer 로딩 (CPU)
+    get_llm()                                               # ChatOpenAI 인스턴스
+    logger.info("Singletons initialized")
+
     logger.info("Starting RabbitMQ Consumer...")
     await start_consumer()
     logger.info("RabbitMQ Consumer started successfully")

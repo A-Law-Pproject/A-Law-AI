@@ -287,9 +287,9 @@ class RabbitMQConsumer:
                         ClauseRiskResult(
                             clause_title=clause.get("category") or clause.get("title") or clause.get("text", "")[:40],
                             clause_content=clause.get("content") or clause.get("text", ""),
-                            risk_level=clause["risk_level"],
+                            risk_level=clause.get("risk_level", "안전"),  # LLM이 필드 누락 시 KeyError 방지
                             category=clause.get("category", ""),
-                            score=int(clause.get("score", 0)),
+                            score=int(clause.get("score") or 0),          # null → None → int(None) TypeError 방지
                             legal_reference=clause.get("related_law", ""),
                             recommendation=clause.get("recommendation") or clause.get("analysis", ""),
                             reasoning_summary=clause.get("analysis", ""),
@@ -328,17 +328,24 @@ class RabbitMQConsumer:
                 "3. 특약사항 및 특이사항\n\n"
                 f"계약서 내용:\n{text[:2000]}"
             )
-            rag_result = await asyncio.to_thread(
-                rag_query,
-                question=combined_question,
-                client=db,
-                embeddings=embeddings,
-                llm=llm,
-                collections=["law_database"],
-                k_per_collection=3,
-                use_query_expansion=False,
-            )
-            key_points = [{"answer": rag_result["answer"]}]
+            try:
+                rag_result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        rag_query,
+                        question=combined_question,
+                        client=db,
+                        embeddings=embeddings,
+                        llm=llm,
+                        collections=["law_database"],
+                        k_per_collection=3,
+                        use_query_expansion=False,
+                    ),
+                    timeout=settings.ANALYSIS_TIMEOUT,
+                )
+                key_points = [{"answer": rag_result["answer"]}]
+            except asyncio.TimeoutError:
+                logger.warning(f"[Consumer] 요약 RAG 타임아웃 ({settings.ANALYSIS_TIMEOUT}s) - 기본 요약으로 폴백")
+                return self._basic_summary(text)
 
             # 기본 정보 추출
             basic_info = self._extract_basic_info(text)
@@ -413,11 +420,14 @@ class RabbitMQConsumer:
             return await self._basic_risk_analysis(text)
 
         try:
-            result = await detect_risk_contract(
-                user_clause=text,
-                client=db,
-                embeddings=embeddings,
-                llm=llm,
+            result = await asyncio.wait_for(
+                detect_risk_contract(
+                    user_clause=text,
+                    client=db,
+                    embeddings=embeddings,
+                    llm=llm,
+                ),
+                timeout=settings.ANALYSIS_TIMEOUT,
             )
             rs = result["risk_summary"]
             logger.info(
