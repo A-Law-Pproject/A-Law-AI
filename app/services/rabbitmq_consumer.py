@@ -285,8 +285,8 @@ class RabbitMQConsumer:
                     detected_clause_count=risk_summary.get("Risk", 0) + risk_summary.get("Caution", 0),
                     clause_results=[
                         ClauseRiskResult(
-                            clause_title=clause.get("category") or clause.get("title") or clause.get("text", "")[:40],
-                            clause_content=clause.get("content") or clause.get("text", ""),
+                            clause_title=clause.get("category") or clause.get("title") or (clause.get("text") or "")[:40],
+                            clause_content=clause.get("content") or clause.get("text") or "",
                             risk_level=clause.get("risk_level", "안전"),  # LLM이 필드 누락 시 KeyError 방지
                             category=clause.get("category", ""),
                             score=int(clause.get("score") or 0),          # null → None → int(None) TypeError 방지
