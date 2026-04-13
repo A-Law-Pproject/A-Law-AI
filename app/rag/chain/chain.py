@@ -322,9 +322,11 @@ async def detect_risk_contract(
     law_text = "\n".join(d.page_content for d in law_results) or "관련 법률 없음"
 
     _llm_start = time.perf_counter()
+    # 프롬프트 토큰 절감: 전체 텍스트 대신 앞 3000자만 사용
+    # (RAG 검색은 이미 앞 500자로 수행했으므로 정보 손실 최소)
     response = await llm.ainvoke(
         CONTRACT_RISK_PROMPT.format(
-            contract_text=user_clause,
+            contract_text=user_clause[:3000],
             illegal_matches=illegal_text,
             normal_matches=normal_text,
             law_context=law_text,

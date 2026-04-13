@@ -23,7 +23,9 @@ from app.schemas.contract_analysis_dto import (
     ClauseRiskResult,
     AnalysisStatus
 )
-from app.rag.chain.chain import rag_query, detect_risk_contract
+from app.rag.chain.chain import detect_risk_contract, build_context
+from app.rag.chain.prompts import CONTRACT_QA_PROMPT
+from app.rag.retriever.multi_retriever import async_search_multi_index
 
 
 class RabbitMQConsumer:
@@ -309,61 +311,61 @@ class RabbitMQConsumer:
         """
         RAG 기반 계약서 요약
 
-        법률 문서, 약관, 특약사항 DB를 참조하여 계약서의 핵심 내용을 요약
+        asyncio.to_thread(rag_query) 대신 async_search_multi_index + llm.ainvoke 사용:
+        - 임베딩/Pinecone은 스레드, LLM 대기는 이벤트 루프 → 스레드 풀 점유 없음
         """
         try:
-            try:
-                db = get_vector_db()
-                embeddings = get_embeddings()
-                llm = get_llm()
-            except Exception as e:
-                logger.warning(f"[Consumer] RAG 미초기화 - 기본 요약 사용: {e}")
-                return self._basic_summary(text)
+            db = get_vector_db()
+            embeddings = get_embeddings()
+            llm = get_llm()
+        except Exception as e:
+            logger.warning(f"[Consumer] RAG 미초기화 - 기본 요약 사용: {e}")
+            return self._basic_summary(text)
 
-            # 3개 질문을 하나의 RAG 호출로 통합
-            combined_question = (
-                "아래 계약서를 분석하여 다음 세 가지를 답하세요.\n"
-                "1. 주요 조건 (임대료, 보증금, 계약기간 등)\n"
-                "2. 임차인이 주의해야 할 사항\n"
-                "3. 특약사항 및 특이사항\n\n"
-                f"계약서 내용:\n{text[:2000]}"
+        combined_question = (
+            "아래 계약서를 분석하여 다음 세 가지를 답하세요.\n"
+            "1. 주요 조건 (임대료, 보증금, 계약기간 등)\n"
+            "2. 임차인이 주의해야 할 사항\n"
+            "3. 특약사항 및 특이사항\n\n"
+            f"계약서 내용:\n{text[:2000]}"
+        )
+
+        try:
+            # 1. Pinecone 검색 (내부적으로 asyncio.to_thread 사용)
+            docs = await async_search_multi_index(
+                db, embeddings, combined_question,
+                collections=["law_database"],
+                k_per_collection=3,
             )
-            try:
-                rag_result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        rag_query,
-                        question=combined_question,
-                        client=db,
-                        embeddings=embeddings,
-                        llm=llm,
-                        collections=["law_database"],
-                        k_per_collection=3,
-                        use_query_expansion=False,
-                    ),
-                    timeout=settings.ANALYSIS_TIMEOUT,
-                )
-                key_points = [{"answer": rag_result["answer"]}]
-            except asyncio.TimeoutError:
-                logger.warning(f"[Consumer] 요약 RAG 타임아웃 ({settings.ANALYSIS_TIMEOUT}s) - 기본 요약으로 폴백")
-                return self._basic_summary(text)
 
-            # 기본 정보 추출
-            basic_info = self._extract_basic_info(text)
+            # 2. LLM 비동기 호출 (스레드 불필요, 이벤트 루프에서 대기)
+            context = build_context(docs)
+            prompt_text = CONTRACT_QA_PROMPT.format(
+                context=context,
+                question=combined_question,
+            )
+            response = await asyncio.wait_for(
+                llm.ainvoke(prompt_text),
+                timeout=settings.ANALYSIS_TIMEOUT,
+            )
+            key_points = [{"answer": response.content}]
 
-            summary = {
-                "key_points": key_points,
-                "basic_info": basic_info,
-                "total_length": len(text),
-                "estimated_read_time": max(1, len(text) // 200),  # 분 단위
-                "summary_type": "rag_based"
-            }
-
-            logger.info(f"[Consumer] RAG 기반 요약 완료 - {len(key_points)}개 포인트")
-            return summary
-
+        except asyncio.TimeoutError:
+            logger.warning(f"[Consumer] 요약 타임아웃 ({settings.ANALYSIS_TIMEOUT}s) - 기본 요약으로 폴백")
+            return self._basic_summary(text)
         except Exception as e:
             logger.error(f"[Consumer] Summary error: {e}")
             return self._basic_summary(text)
+
+        basic_info = self._extract_basic_info(text)
+        logger.info("[Consumer] RAG 기반 요약 완료")
+        return {
+            "key_points": key_points,
+            "basic_info": basic_info,
+            "total_length": len(text),
+            "estimated_read_time": max(1, len(text) // 200),
+            "summary_type": "rag_based"
+        }
 
     def _basic_summary(self, text: str) -> dict:
         """RAG 실패 시 기본 요약"""
