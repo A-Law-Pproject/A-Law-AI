@@ -5,6 +5,8 @@ import time
 import tiktoken
 from functools import lru_cache
 
+from loguru import logger
+
 import openai
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
