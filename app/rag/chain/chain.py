@@ -276,7 +276,9 @@ async def detect_risk_contract(
     # 계약서 대표 쿼리로 RAG 검색 (전체 텍스트가 길면 앞 500자 사용)
     search_query = user_clause[:500]
     # SentenceTransformer는 CPU 집약적이므로 스레드 풀에서 실행
+    logger.debug("[Risk] 임베딩 시작")
     query_vector = await asyncio.to_thread(embeddings.embed_query, search_query)
+    logger.debug("[Risk] 임베딩 완료, Pinecone 검색 시작")
 
     law_statutes_filter = infer_law_statutes_filter(search_query)
 
@@ -305,6 +307,7 @@ async def detect_risk_contract(
         ),
     )
     law_results = law_db_results + law_statutes_results
+    logger.debug(f"[Risk] Pinecone 검색 완료 - illegal:{len(illegal_results)} normal:{len(normal_results)} law:{len(law_results)}, LLM 호출 시작")
 
     illegal_text = "\n".join(
         f"- ({d.metadata.get('category', '')}) {d.page_content}"
@@ -328,6 +331,7 @@ async def detect_risk_contract(
         )
     )
     LLM_LATENCY.observe(time.perf_counter() - _llm_start)
+    logger.debug(f"[Risk] LLM 응답 완료 ({time.perf_counter() - _llm_start:.1f}s)")
 
     try:
         content = response.content.strip()
