@@ -509,7 +509,11 @@ async def explain_term_rag(
     LLM_LATENCY.observe(time.perf_counter() - _llm_start)
 
     try:
-        return json.loads(response.content)
+        content = response.content.strip()
+        if content.startswith("```"):
+            content = re.sub(r'^```(?:json)?\s*\n?', '', content)
+            content = re.sub(r'\n?```\s*$', '', content.strip())
+        return json.loads(content)
     except json.JSONDecodeError:
         # JSON 파싱 실패 시 전체 응답을 simple_explanation으로 폴백
         return {

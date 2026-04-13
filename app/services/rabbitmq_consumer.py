@@ -440,8 +440,11 @@ class RabbitMQConsumer:
             for clause in result["clauses"]:
                 clause["recommendation"] = clause.get("analysis", "")
             return result
+        except asyncio.TimeoutError:
+            logger.warning(f"[Consumer] 위험 분석 타임아웃 ({settings.ANALYSIS_TIMEOUT}s) - 기본 결과 반환")
+            return await self._basic_risk_analysis(text)
         except Exception as e:
-            logger.error(f"[Consumer] Risk analysis error: {e}")
+            logger.error(f"[Consumer] Risk analysis error: {type(e).__name__}: {e}")
             return await self._basic_risk_analysis(text)
 
     async def _basic_risk_analysis(self, text: str) -> dict:

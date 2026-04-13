@@ -46,7 +46,7 @@ def get_llm() -> ChatOpenAI:
             model=settings.MODEL_NAME,
             api_key=settings.OPENAI_API_KEY,
             temperature=0,
-            timeout=120,  # OpenAI API 호출 단위 타임아웃 (초)
+            timeout=300,  # OpenAI API 호출 단위 타임아웃 (초)
         )
         logger.info(f"ChatOpenAI 싱글톤 초기화 완료 (model={settings.MODEL_NAME})")
     return _llm

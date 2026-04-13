@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Analysis Settings
-    ANALYSIS_TIMEOUT: int = 300  # GPT-4o 병렬 호출(요약 3회 + 위험분석) 타임아웃 (초)
+    ANALYSIS_TIMEOUT: int = 600  # GPT-4o 병렬 호출(요약 + 위험분석) 타임아웃 (초)
     ANALYSIS_EXCHANGE: str = "contract-analysis-ex"
     ANALYSIS_QUEUE: str = "contract-analysis-queue"
     ANALYSIS_ROUTING_KEY: str = "contract.analyze"
