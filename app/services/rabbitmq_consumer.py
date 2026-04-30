@@ -298,10 +298,8 @@ class RabbitMQConsumer:
                             risk_level=clause.get("risk_level", "안전"),  # LLM이 필드 누락 시 KeyError 방지
                             category=clause.get("category", ""),
                             score=int(clause.get("score") or 0),          # null → None → int(None) TypeError 방지
-                            legal_reference=clause.get("related_law", ""),
-                            recommendation=clause.get("recommendation") or clause.get("analysis", ""),
+                            legal_reference=clause.get("legal_reference", ""),
                             reasoning_summary=clause.get("analysis", ""),
-                            related_law=clause.get("related_law", ""),
                         )
                         for clause in clauses
                     ],
@@ -442,9 +440,6 @@ class RabbitMQConsumer:
                 f"[Consumer] RAG 위험 분석 완료 - "
                 f"Risk: {rs['Risk']}, Caution: {rs['Caution']}, Safety: {rs['Safety']}"
             )
-            # Spring Boot 쪽이 참조하는 'recommendation' 키 추가 (analysis는 유지)
-            for clause in result["clauses"]:
-                clause["recommendation"] = clause.get("analysis", "")
             return result
         except asyncio.TimeoutError:
             logger.warning(f"[Consumer] 위험 분석 타임아웃 ({settings.ANALYSIS_TIMEOUT}s) - 기본 결과 반환")

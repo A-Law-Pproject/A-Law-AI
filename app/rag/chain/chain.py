@@ -402,6 +402,10 @@ async def _detect_risk_legacy(
         }
     if "total_clauses" not in result:
         result["total_clauses"] = len(result.get("clauses", []))
+    # legacy 경로: related_law → legal_reference 키 통일
+    for clause in result.get("clauses", []):
+        if "related_law" in clause and "legal_reference" not in clause:
+            clause["legal_reference"] = clause.pop("related_law")
     return result
 
 
@@ -453,7 +457,7 @@ async def detect_risk_contract(
                 risk_level="주의",
                 category="분석 오류",
                 analysis="분석 중 오류가 발생했습니다.",
-                related_law="",
+                legal_reference="",
                 score=50,
             ))
         else:

@@ -10,7 +10,7 @@ class ClauseRisk(BaseModel):
     risk_level: Literal["위험", "주의", "안전"] = Field(description="위험 수준")
     category: str = Field(description="조항 유형 (예: 원상복구, 관리비, 임차인 의무 등)")
     analysis: str = Field(description="위험/주의/안전 판단 근거 (2~3문장)")
-    related_law: str = Field(description="관련 법률 조항 (예: 주택임대차보호법 제3조). 없으면 빈 문자열")
+    legal_reference: str = Field(description="위험 판단 근거 법률 조항 (예: 주택임대차보호법 제3조). 없으면 빈 문자열")
     score: int = Field(ge=0, le=100, description="위험 점수 0~100")
 
 
