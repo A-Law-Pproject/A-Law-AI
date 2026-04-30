@@ -77,10 +77,16 @@ class RabbitMQConsumer:
                 durable=True
             )
 
-            # 결과 Queue 선언 + 바인딩 (TTL 없음 - Spring Boot 선언과 동일)
+            # 결과 Queue 선언 + 바인딩
+            # Spring Boot RabbitMQConfig.contractResultQueue() 인자와 정확히 일치해야 함
+            # (불일치 시 PRECONDITION_FAILED 발생)
             result_queue = await self.channel.declare_queue(
                 settings.RESULT_QUEUE,
                 durable=True,
+                arguments={
+                    "x-dead-letter-exchange": f"{settings.RESULT_QUEUE}.dlx",
+                    "x-dead-letter-routing-key": "dead-letter",
+                },
             )
             await result_queue.bind(self.result_exchange, routing_key=settings.RESULT_ROUTING_KEY)
 
@@ -269,10 +275,10 @@ class RabbitMQConsumer:
                     key_terms=key_terms,
                 )
 
-            # Risk 분석 결과 추가
-            if risk_analysis_result and risk_analysis_result.get("clauses"):
+            # Risk 분석 결과 추가 (clauses가 빈 리스트여도 항상 포함해야 SSE analysis_result 이벤트 발행됨)
+            if risk_analysis_result:
                 risk_summary = risk_analysis_result.get("risk_summary", {})
-                clauses = risk_analysis_result["clauses"]
+                clauses = risk_analysis_result.get("clauses") or []
                 total = len(clauses)
                 # JSON null → None 대비: or 0 으로 안전하게 처리
                 raw_score = float(risk_analysis_result.get("overall_risk_score") or 0)

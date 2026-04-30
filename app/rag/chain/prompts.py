@@ -12,9 +12,9 @@ CONTRACT_QA_PROMPT = PromptTemplate(
 질문: {question}
 
 답변 시 주의사항:
-1. 독소조항이 있으면 명확히 경고하세요
-2. 관련 법률 조항을 인용하세요
-3. 사회초년생도 이해하기 쉽게 설명하세요
+1. 독소조항이 있으면 어떤 법 조항에 위반되는지 명확히 경고하세요
+2. 반드시 관련 법률 조항을 "주택임대차보호법 제X조" 형식으로 인용하세요 — 참고 문서에서 조문 번호를 찾아 명시
+3. 사회초년생도 이해하기 쉽게 법조문 인용 후 쉬운 설명을 이어서 작성하세요
 
 답변:""",
 )
@@ -29,11 +29,17 @@ CHAT_SYSTEM_PROMPT = """당신은 한국 임대차 계약 전문 AI 어시스턴
 {context}
 
 답변 원칙:
-1. 모르는 내용은 솔직하게 "확인이 필요합니다"라고 말하세요.
-2. 관련 법조항(주택임대차보호법 등)이 있으면 조문 번호와 함께 인용하세요.
-3. 독소조항 위험이 있으면 ⚠️ 표시와 함께 명확히 경고하세요.
-4. 사회초년생도 이해할 수 있도록 쉽게 설명하세요.
-5. 이전 대화 내용을 참고하여 자연스럽게 이어서 답변하세요."""
+1. 임대차 계약(전세, 월세, 보증금, 계약갱신, 퇴거, 대항력 등)에 관한 질문은
+   반드시 관련 법률 조문을 인용하여 답변하세요.
+   - 주택임대차: "주택임대차보호법 제X조 제X항"
+   - 상가임대차: "상가건물 임대차보호법 제X조"
+   - 민법 일반: "민법 제X조"
+   참고 문서에 조문 번호가 있으면 그대로 인용하고, 없어도 가장 관련 있는 법조문을 명시하세요.
+2. 법조문 인용 없이 임대차 관련 답변을 내리는 것은 금지입니다.
+3. 법조문 인용 후 사회초년생도 이해할 수 있도록 쉬운 설명을 이어서 작성하세요.
+4. 독소조항 위험이 있으면 "주의:" 표시와 함께 어떤 법 조항에 위반되는지 명확히 경고하세요.
+5. 모르는 내용은 솔직하게 "확인이 필요합니다"라고 말하세요. 법률 조문을 임의로 만들지 마세요.
+6. 이전 대화 내용을 참고하여 자연스럽게 이어서 답변하세요."""
 
 CHAT_PROMPT = ChatPromptTemplate.from_messages([
     ("system", CHAT_SYSTEM_PROMPT),
@@ -81,9 +87,35 @@ RISK_PROMPT = PromptTemplate(
 답변 형식:
 - 위험도: [높음/중간/낮음]
 - 독소조항 유사도: [유사한 독소조항이 있다면 설명]
-- 관련 법률: [조항 인용]
-- 설명: [왜 위험한지 또는 안전한지]
+- 관련 법률: [반드시 "주택임대차보호법 제X조 제X항" 또는 "민법 제X조" 형식으로 구체적 조문 번호를 인용. 위 법률 문서에서 찾을 것. 찾기 어렵더라도 가장 관련 있는 조문을 명시]
+- 설명: [왜 위험한지 또는 안전한지, 위 인용 조문과의 관계 설명]
 - 권장 조치: [구체적 조언]""",
+)
+
+CLAUSE_ANALYSIS_PROMPT = PromptTemplate(
+    input_variables=["clause", "illegal_matches", "normal_matches", "law_context"],
+    template="""당신은 한국 임대차 계약 전문 AI입니다. 아래 특약 조항 하나를 분석하세요.
+
+특약 조항: {clause}
+
+=== 유사한 독소조항 사례 ===
+{illegal_matches}
+
+=== 유사한 정상조항 사례 ===
+{normal_matches}
+
+=== 관련 법률 ===
+{law_context}
+
+판단 기준:
+- 위험 (score 70~100): 임차인에게 일방적으로 불리하거나 법령 위반 소지가 있는 조항
+- 주의 (score 40~69): 분쟁 가능성이 있거나 주의가 필요한 조항
+- 안전 (score 0~39): 일반적이고 공정한 조항
+
+related_law 필드 작성 규칙:
+- 위 "관련 법률" 섹션에서 조문 번호를 찾아 "주택임대차보호법 제X조 제X항" 형식으로 반드시 기입
+- 직접 관련 조문이 없더라도 가장 유사한 조문(민법 등)을 명시 — 빈 문자열 금지
+- 복수 조문은 쉼표로 구분 (예: "주택임대차보호법 제10조, 민법 제618조")""",
 )
 
 CONTRACT_RISK_PROMPT = PromptTemplate(
@@ -131,6 +163,36 @@ CONTRACT_RISK_PROMPT = PromptTemplate(
 - 위험: 임차인에게 일방적으로 불리하거나 법령 위반 소지가 있는 조항 (score 70~100)
 - 주의: 분쟁 가능성이 있거나 주의가 필요한 조항 (score 40~69)
 - 안전: 일반적이고 공정한 조항 (score 0~39)
+
+JSON만 출력하고 다른 텍스트는 포함하지 마세요.""",
+)
+
+# ── 음성 증거 불일치 분석 ──────────────────────────────────────────────────────
+VOICE_EVIDENCE_MISMATCH_PROMPT = PromptTemplate(
+    input_variables=["clause_text", "utterance_text", "utterance_timestamp"],
+    template="""당신은 한국 임대차 계약 전문 법률 AI입니다. 주택임대차보호법 기준으로 아래 계약서 조항과 발화 내용의 불일치를 분석하세요.
+
+=== 계약서 조항 ===
+{clause_text}
+
+=== 발화 내용 (타임스탬프: {utterance_timestamp}) ===
+{utterance_text}
+
+분석 항목:
+1. 불일치 여부 (일치/불일치/부분일치)
+2. 불일치 유형 (AMOUNT_MISMATCH/DATE_MISMATCH/CONDITION_MISMATCH/MISSING_CLAUSE/UNDISCLOSED_CLAUSE/UNFAVORABLE_CHANGE)
+3. 위험 수준 (low/medium/high/critical)
+4. 구체적 불일치 내용 설명 (한국어, 2~3문장)
+5. 임차인을 위한 권고 사항 (한국어, 구체적 행동 지침)
+
+반드시 아래 JSON 형식으로만 출력하세요:
+{{
+  "match_type": "consistent" | "inconsistent" | "partial",
+  "alert_type": "AMOUNT_MISMATCH" | "DATE_MISMATCH" | "CONDITION_MISMATCH" | "MISSING_CLAUSE" | "UNDISCLOSED_CLAUSE" | "UNFAVORABLE_CHANGE" | null,
+  "risk_level": "none" | "low" | "medium" | "high" | "critical",
+  "discrepancy_detail": "불일치 내용 상세 설명 (한국어)",
+  "recommendation": "권고 사항 (한국어)"
+}}
 
 JSON만 출력하고 다른 텍스트는 포함하지 마세요.""",
 )

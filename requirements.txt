@@ -41,6 +41,7 @@ certifi>=2024.2.2
 
 # AWS S3
 boto3>=1.34.0
+aioboto3>=15.0.0
 
 # Utilities
 python-dotenv>=1.0.0

@@ -152,6 +152,9 @@ def load_doc_file(file_path: str | Path) -> list[Document]:
       .doc  → win32com → soffice → 경고 후 빈 리스트
     """
     file_path = Path(file_path)
+    if file_path.name.startswith("~$"):
+        logger.debug(f"[DOC로더] Word 임시 파일 건너뜀: {file_path.name}")
+        return []
     if not file_path.exists():
         logger.warning(f"[DOC로더] 파일 없음: {file_path}")
         return []
@@ -197,7 +200,8 @@ def load_doc_dir(folder_path: str | Path) -> list[Document]:
     """
     folder_path = Path(folder_path)
     doc_files = sorted(
-        list(folder_path.glob("*.doc")) + list(folder_path.glob("*.docx"))
+        f for f in list(folder_path.glob("*.doc")) + list(folder_path.glob("*.docx"))
+        if not f.name.startswith("~$")  # Word 임시 잠금 파일 제외
     )
 
     if not doc_files:
