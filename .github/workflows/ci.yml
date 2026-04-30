@@ -2,9 +2,9 @@ name: FastAPI CI
 
 on:
   push:
-    branches: [main, develop, qa/release-v0.0.1]
+    branches: [main, develop, qa/release-v0.0.2]
   pull_request:
-    branches: [main, develop, qa/release-v0.0.1]
+    branches: [main, develop, qa/release-v0.0.2]
 
 jobs:
   test:
