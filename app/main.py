@@ -9,6 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.routers import api_router
 from app.services.rabbitmq_consumer import start_consumer, stop_consumer, consumer
+from app.services.voice_contract_fact_check_consumer import (
+    start_voice_contract_fact_check_consumer,
+    stop_voice_contract_fact_check_consumer,
+)
 from app.core.dependencies import get_vector_db, get_embeddings, get_llm
 from loguru import logger
 
@@ -39,11 +43,19 @@ async def lifespan(app: FastAPI):
     await start_consumer()
     logger.info("RabbitMQ Consumer started successfully")
 
+    logger.info("Starting Voice Contract Fact-Check Consumer...")
+    await start_voice_contract_fact_check_consumer()
+    logger.info("Voice Contract Fact-Check Consumer started successfully")
+
     yield
 
     logger.info("Stopping RabbitMQ Consumer...")
     await stop_consumer()
     logger.info("RabbitMQ Consumer stopped")
+
+    logger.info("Stopping Voice Contract Fact-Check Consumer...")
+    await stop_voice_contract_fact_check_consumer()
+    logger.info("Voice Contract Fact-Check Consumer stopped")
 
 
 app = FastAPI(

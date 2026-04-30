@@ -1,34 +1,44 @@
 """
-API 라우터 등록
+API router registration.
 """
 from fastapi import APIRouter
-from app.api.endpoints import contract, ocr, rag, chat
+
+from app.api.endpoints import chat, contract, ocr, rag, voice_standalone
 
 api_router = APIRouter()
 
-# 계약서 분석
 api_router.include_router(
     contract.router,
     prefix="/contracts",
-    tags=["계약서 분석"],
+    tags=["怨꾩빟??遺꾩꽍"],
 )
 
-# ocr
 api_router.include_router(
     ocr.router,
     prefix="/contracts",
-    tags=["계약서 OCR"],
+    tags=["怨꾩빟??OCR"],
 )
-# 독소조항 탐지 (계약서 분석 통합)
+
 api_router.include_router(
     rag.router,
     prefix="/contracts",
-    tags=["계약서 분석"],
+    tags=["怨꾩빟??遺꾩꽍"],
 )
 
-# RAG 챗봇
 api_router.include_router(
     chat.router,
     prefix="/chat",
-    tags=["챗봇"],
+    tags=["梨쀫큸"],
+)
+
+api_router.include_router(
+    voice_standalone.router,
+    prefix="/voice",
+    tags=["?뚯꽦 遺꾩꽍"],
+)
+
+api_router.include_router(
+    voice_standalone.legacy_router,
+    prefix="/voice",
+    tags=["?뚯꽦 遺꾩꽍"],
 )
