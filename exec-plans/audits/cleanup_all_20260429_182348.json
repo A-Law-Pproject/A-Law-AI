@@ -1,0 +1,866 @@
+{
+  "unused_python": [
+    {
+      "name": "health_check",
+      "file": "main.py",
+      "line": 82,
+      "type": "function/class/const"
+    },
+    {
+      "name": "health_check",
+      "file": "api\\endpoints\\rag.py",
+      "line": 76,
+      "type": "function/class/const"
+    },
+    {
+      "name": "get_chat_history",
+      "file": "api\\endpoints\\chat.py",
+      "line": 108,
+      "type": "function/class/const"
+    },
+    {
+      "name": "delete_chat_session",
+      "file": "api\\endpoints\\chat.py",
+      "line": 126,
+      "type": "function/class/const"
+    },
+    {
+      "name": "explain_term",
+      "file": "api\\endpoints\\contract.py",
+      "line": 19,
+      "type": "function/class/const"
+    },
+    {
+      "name": "run_ocr_from_s3",
+      "file": "api\\endpoints\\ocr.py",
+      "line": 43,
+      "type": "function/class/const"
+    },
+    {
+      "name": "run_ocr_full",
+      "file": "api\\endpoints\\ocr.py",
+      "line": 74,
+      "type": "function/class/const"
+    },
+    {
+      "name": "detect_clause_risk",
+      "file": "api\\endpoints\\rag.py",
+      "line": 92,
+      "type": "function/class/const"
+    },
+    {
+      "name": "analyze_voice_evidence",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 47,
+      "type": "function/class/const"
+    },
+    {
+      "name": "analyze_voice_evidence_s3",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 149,
+      "type": "function/class/const"
+    },
+    {
+      "name": "get_evidence_graph",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 241,
+      "type": "function/class/const"
+    },
+    {
+      "name": "get_evidence_alerts",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 278,
+      "type": "function/class/const"
+    },
+    {
+      "name": "TestDataset",
+      "file": "evaluation\\test_dataset.py",
+      "line": 20,
+      "type": "function/class/const"
+    },
+    {
+      "name": "process_contract",
+      "file": "ocr\\contract_ocr_model.py",
+      "line": 1429,
+      "type": "function/class/const"
+    },
+    {
+      "name": "OCRProcessor",
+      "file": "ocr\\ocr_processor.py",
+      "line": 801,
+      "type": "function/class/const"
+    },
+    {
+      "name": "HighPrecisionOCR",
+      "file": "ocr\\ocr_processor.py",
+      "line": 823,
+      "type": "function/class/const"
+    },
+    {
+      "name": "OCRComparator",
+      "file": "ocr\\ocr_processor.py",
+      "line": 869,
+      "type": "function/class/const"
+    },
+    {
+      "name": "create_ocr_processor",
+      "file": "ocr\\ocr_processor.py",
+      "line": 942,
+      "type": "function/class/const"
+    },
+    {
+      "name": "ContractFieldExtractor",
+      "file": "ocr\\postprocessor.py",
+      "line": 427,
+      "type": "function/class/const"
+    },
+    {
+      "name": "ValidationResponse",
+      "file": "ocr\\schemas.py",
+      "line": 295,
+      "type": "function/class/const"
+    },
+    {
+      "name": "normalize_coordinates",
+      "file": "ocr\\upstage_ocr.py",
+      "line": 528,
+      "type": "function/class/const"
+    },
+    {
+      "name": "load_contract_json_dir",
+      "file": "rag\\data_loader\\contract_json_loader.py",
+      "line": 103,
+      "type": "function/class/const"
+    },
+    {
+      "name": "load_doc_dir",
+      "file": "rag\\data_loader\\doc_loader.py",
+      "line": 192,
+      "type": "function/class/const"
+    },
+    {
+      "name": "load_training_documents",
+      "file": "rag\\data_loader\\jsonl_loader.py",
+      "line": 62,
+      "type": "function/class/const"
+    },
+    {
+      "name": "load_precedents",
+      "file": "rag\\data_loader\\precedent_loader.py",
+      "line": 21,
+      "type": "function/class/const"
+    },
+    {
+      "name": "load_qa_json_dir",
+      "file": "rag\\data_loader\\qa_json_loader.py",
+      "line": 110,
+      "type": "function/class/const"
+    },
+    {
+      "name": "parse_illegal_clauses",
+      "file": "rag\\data_loader\\special_clause_loader.py",
+      "line": 12,
+      "type": "function/class/const"
+    },
+    {
+      "name": "parse_normal_clauses",
+      "file": "rag\\data_loader\\special_clause_loader.py",
+      "line": 49,
+      "type": "function/class/const"
+    },
+    {
+      "name": "load_unfavorable_clause_json_dir",
+      "file": "rag\\data_loader\\unfavorable_clause_json_loader.py",
+      "line": 83,
+      "type": "function/class/const"
+    },
+    {
+      "name": "ContractRequest",
+      "file": "schemas\\contract.py",
+      "line": 8,
+      "type": "function/class/const"
+    },
+    {
+      "name": "FraudRisk",
+      "file": "schemas\\contract.py",
+      "line": 33,
+      "type": "function/class/const"
+    },
+    {
+      "name": "MissingClause",
+      "file": "schemas\\contract.py",
+      "line": 41,
+      "type": "function/class/const"
+    },
+    {
+      "name": "IllegalClause",
+      "file": "schemas\\contract.py",
+      "line": 49,
+      "type": "function/class/const"
+    },
+    {
+      "name": "FraudDetectionResponse",
+      "file": "schemas\\contract.py",
+      "line": 57,
+      "type": "function/class/const"
+    },
+    {
+      "name": "AnalysisResult",
+      "file": "schemas\\contract.py",
+      "line": 109,
+      "type": "function/class/const"
+    },
+    {
+      "name": "RiskLevel",
+      "file": "schemas\\contract_analysis_dto.py",
+      "line": 20,
+      "type": "function/class/const"
+    },
+    {
+      "name": "HealthResponse",
+      "file": "schemas\\ocr_response.py",
+      "line": 49,
+      "type": "function/class/const"
+    },
+    {
+      "name": "AnalysisResponse",
+      "file": "schemas\\ocr_response.py",
+      "line": 122,
+      "type": "function/class/const"
+    },
+    {
+      "name": "ContractRiskResult",
+      "file": "schemas\\risk_analysis.py",
+      "line": 17,
+      "type": "function/class/const"
+    }
+  ],
+  "long_functions": [
+    {
+      "name": "analyze_voice_evidence",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 47,
+      "lines": 89
+    },
+    {
+      "name": "_extract_fields_with_llm",
+      "file": "ocr\\contract_ocr_model.py",
+      "line": 1010,
+      "lines": 112
+    },
+    {
+      "name": "parse_upstage_elements",
+      "file": "ocr\\upstage_ocr.py",
+      "line": 692,
+      "lines": 93
+    },
+    {
+      "name": "process",
+      "file": "ocr\\upstage_ocr.py",
+      "line": 810,
+      "lines": 110
+    },
+    {
+      "name": "detect_risk",
+      "file": "rag\\chain\\chain.py",
+      "line": 160,
+      "lines": 93
+    },
+    {
+      "name": "chat_rag",
+      "file": "rag\\chain\\chain.py",
+      "line": 512,
+      "lines": 109
+    },
+    {
+      "name": "load_precedents",
+      "file": "rag\\data_loader\\precedent_loader.py",
+      "line": 21,
+      "lines": 99
+    },
+    {
+      "name": "_process_analysis",
+      "file": "services\\rabbitmq_consumer.py",
+      "line": 204,
+      "lines": 104
+    },
+    {
+      "name": "build_evidence_graph",
+      "file": "services\\voice\\evidence_graph_service.py",
+      "line": 211,
+      "lines": 165
+    },
+    {
+      "name": "detect_mismatches",
+      "file": "services\\voice\\mismatch_detector.py",
+      "line": 189,
+      "lines": 116
+    }
+  ],
+  "unused_imports": [
+    {
+      "name": "get_embeddings",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 14,
+      "from": "app.core.dependencies"
+    },
+    {
+      "name": "get_llm",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 14,
+      "from": "app.core.dependencies"
+    },
+    {
+      "name": "get_vector_db",
+      "file": "api\\endpoints\\voice_evidence.py",
+      "line": 14,
+      "from": "app.core.dependencies"
+    },
+    {
+      "name": "Enum",
+      "file": "ocr\\contract_ocr_model.py",
+      "line": 33,
+      "from": "enum"
+    },
+    {
+      "name": "base64",
+      "file": "ocr\\ocr_processor.py",
+      "line": 15,
+      "from": "(direct)"
+    },
+    {
+      "name": "logger",
+      "file": "ocr\\postprocessor.py",
+      "line": 15,
+      "from": "loguru"
+    },
+    {
+      "name": "Union",
+      "file": "ocr\\schemas.py",
+      "line": 7,
+      "from": "typing"
+    },
+    {
+      "name": "date",
+      "file": "ocr\\schemas.py",
+      "line": 8,
+      "from": "datetime"
+    },
+    {
+      "name": "base64",
+      "file": "ocr\\upstage_ocr.py",
+      "line": 15,
+      "from": "(direct)"
+    },
+    {
+      "name": "Union",
+      "file": "ocr\\upstage_ocr.py",
+      "line": 19,
+      "from": "typing"
+    },
+    {
+      "name": "dataclass",
+      "file": "ocr\\upstage_ocr.py",
+      "line": 20,
+      "from": "dataclasses"
+    },
+    {
+      "name": "field",
+      "file": "ocr\\upstage_ocr.py",
+      "line": 20,
+      "from": "dataclasses"
+    },
+    {
+      "name": "async_expand_query_multi",
+      "file": "rag\\chain\\chain.py",
+      "line": 29,
+      "from": "app.rag.retriever.query_expansion"
+    },
+    {
+      "name": "build_context",
+      "file": "rag\\chain\\__init__.py",
+      "line": 1,
+      "from": "chain"
+    },
+    {
+      "name": "rag_query",
+      "file": "rag\\chain\\__init__.py",
+      "line": 1,
+      "from": "chain"
+    },
+    {
+      "name": "detect_risk",
+      "file": "rag\\chain\\__init__.py",
+      "line": 1,
+      "from": "chain"
+    },
+    {
+      "name": "RagBot",
+      "file": "rag\\chain\\__init__.py",
+      "line": 1,
+      "from": "chain"
+    },
+    {
+      "name": "CONTRACT_QA_PROMPT",
+      "file": "rag\\chain\\__init__.py",
+      "line": 2,
+      "from": "prompts"
+    },
+    {
+      "name": "RISK_PROMPT",
+      "file": "rag\\chain\\__init__.py",
+      "line": 2,
+      "from": "prompts"
+    },
+    {
+      "name": "create_legal_splitter",
+      "file": "rag\\chunking\\__init__.py",
+      "line": 1,
+      "from": "legal_chunker"
+    },
+    {
+      "name": "chunk_documents",
+      "file": "rag\\chunking\\__init__.py",
+      "line": 1,
+      "from": "legal_chunker"
+    },
+    {
+      "name": "KUREEmbeddings",
+      "file": "rag\\embedding\\__init__.py",
+      "line": 1,
+      "from": "kure"
+    },
+    {
+      "name": "get_embeddings",
+      "file": "rag\\embedding\\__init__.py",
+      "line": 1,
+      "from": "kure"
+    },
+    {
+      "name": "asyncio",
+      "file": "rag\\retriever\\query_expansion.py",
+      "line": 15,
+      "from": "(direct)"
+    },
+    {
+      "name": "search_collection",
+      "file": "rag\\retriever\\__init__.py",
+      "line": 1,
+      "from": "multi_retriever"
+    },
+    {
+      "name": "search_multi_index",
+      "file": "rag\\retriever\\__init__.py",
+      "line": 1,
+      "from": "multi_retriever"
+    },
+    {
+      "name": "annotations",
+      "file": "schemas\\risk_analysis.py",
+      "line": 1,
+      "from": "__future__"
+    },
+    {
+      "name": "datetime",
+      "file": "services\\rabbitmq_consumer.py",
+      "line": 9,
+      "from": "datetime"
+    },
+    {
+      "name": "Callable",
+      "file": "services\\rabbitmq_consumer.py",
+      "line": 10,
+      "from": "typing"
+    },
+    {
+      "name": "uuid",
+      "file": "services\\voice\\evidence_graph_service.py",
+      "line": 9,
+      "from": "(direct)"
+    },
+    {
+      "name": "json",
+      "file": "services\\voice\\evidence_graph_service.py",
+      "line": 11,
+      "from": "(direct)"
+    },
+    {
+      "name": "Optional",
+      "file": "services\\voice\\hash_service.py",
+      "line": 10,
+      "from": "typing"
+    },
+    {
+      "name": "asyncio",
+      "file": "services\\voice\\mismatch_detector.py",
+      "line": 10,
+      "from": "(direct)"
+    },
+    {
+      "name": "Optional",
+      "file": "services\\voice\\stt_service.py",
+      "line": 11,
+      "from": "typing"
+    },
+    {
+      "name": "S3Client",
+      "file": "util\\__init__.py",
+      "line": 1,
+      "from": "app.util.s3_client"
+    }
+  ],
+  "unused_java": [
+    {
+      "name": "supportsParameter",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\aop\\CurrentUserIdResolver.java",
+      "line": 20
+    },
+    {
+      "name": "resolveArgument",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\aop\\CurrentUserIdResolver.java",
+      "line": 26
+    },
+    {
+      "name": "redisConnectionFactory",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\config\\RedisConfig.java",
+      "line": 34
+    },
+    {
+      "name": "redisTemplate",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\config\\RedisConfig.java",
+      "line": 56
+    },
+    {
+      "name": "openAPI",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\config\\SwaggerConfig.java",
+      "line": 23
+    },
+    {
+      "name": "handleNotFound",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 24
+    },
+    {
+      "name": "handleConflict",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 30
+    },
+    {
+      "name": "handleBadRequest",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 35
+    },
+    {
+      "name": "handleUnauthorized",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 40
+    },
+    {
+      "name": "handleForbidden",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 45
+    },
+    {
+      "name": "handleIllegalArgument",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 50
+    },
+    {
+      "name": "handleFastApi",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 57
+    },
+    {
+      "name": "handleValidation",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 64
+    },
+    {
+      "name": "handleMissingParam",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 74
+    },
+    {
+      "name": "handleTypeMismatch",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 80
+    },
+    {
+      "name": "handleNoResourceFound",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 87
+    },
+    {
+      "name": "handleUnexpected",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\exception\\GlobalExceptionHandler.java",
+      "line": 93
+    },
+    {
+      "name": "health",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\health\\FastApiHealthChecker.java",
+      "line": 16
+    },
+    {
+      "name": "logProcessTime",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\logging\\LogAspect.java",
+      "line": 26
+    },
+    {
+      "name": "HeaderInfo",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\util\\HttpUtil.java",
+      "line": 138
+    },
+    {
+      "name": "generateOAuth2TempUserKey",
+      "file": "src\\main\\java\\com\\service\\alaw\\common\\util\\KeyUtil.java",
+      "line": 36
+    },
+    {
+      "name": "messageConverter",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 49
+    },
+    {
+      "name": "rabbitTemplate",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 54
+    },
+    {
+      "name": "contractExchange",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 64
+    },
+    {
+      "name": "contractQueue",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 70
+    },
+    {
+      "name": "contractBinding",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 79
+    },
+    {
+      "name": "dlqBinding",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 84
+    },
+    {
+      "name": "aiResultExchange",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 92
+    },
+    {
+      "name": "aiResultQueue",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 98
+    },
+    {
+      "name": "aiResultBinding",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 103
+    },
+    {
+      "name": "contractResultQueue",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 109
+    },
+    {
+      "name": "contractResultBinding",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 114
+    },
+    {
+      "name": "voiceExchange",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 121
+    },
+    {
+      "name": "voiceQueue",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 126
+    },
+    {
+      "name": "voiceBinding",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 131
+    },
+    {
+      "name": "voiceResultExchange",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 138
+    },
+    {
+      "name": "voiceResultQueue",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 143
+    },
+    {
+      "name": "voiceResultBinding",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 148
+    },
+    {
+      "name": "deadLetterExchange",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 153
+    },
+    {
+      "name": "deadLetterQueue",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 158
+    },
+    {
+      "name": "deadLetterBinding",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\RabbitMQConfig.java",
+      "line": 163
+    },
+    {
+      "name": "fastApiWebClient",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\WebClientConfig.java",
+      "line": 36
+    },
+    {
+      "name": "addArgumentResolvers",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\config\\WebConfig.java",
+      "line": 19
+    },
+    {
+      "name": "handleAnalysisResult",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\messaging\\ContractAnalysisConsumer.java",
+      "line": 24
+    },
+    {
+      "name": "consume",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\messaging\\ContractAnalysisResultConsumer.java",
+      "line": 20
+    },
+    {
+      "name": "handleFactCheckResult",
+      "file": "src\\main\\java\\com\\service\\alaw\\infra\\messaging\\VoiceFactCheckConsumer.java",
+      "line": 27
+    },
+    {
+      "name": "fromS3Key",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\contract\\domain\\document\\ContractAnalysisDocument.java",
+      "line": 97
+    },
+    {
+      "name": "updateExplanation",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\contract\\domain\\document\\ExplanationDocument.java",
+      "line": 47
+    },
+    {
+      "name": "updateAnalysisId",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\contract\\domain\\entity\\Contract.java",
+      "line": 101
+    },
+    {
+      "name": "fromLabel",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\contract\\domain\\entity\\ContractStatus.java",
+      "line": 24
+    },
+    {
+      "name": "fromLabel",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\contract\\domain\\entity\\ContractType.java",
+      "line": 26
+    },
+    {
+      "name": "subscribe",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\contract\\presentation\\ContractSseController.java",
+      "line": 23
+    },
+    {
+      "name": "form",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\contract\\presentation\\OcrTestController.java",
+      "line": 30
+    },
+    {
+      "name": "fromLabel",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\user\\domain\\entity\\IsDelete.java",
+      "line": 22
+    },
+    {
+      "name": "update",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\user\\domain\\entity\\User.java",
+      "line": 66
+    },
+    {
+      "name": "fromLabel",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\user\\domain\\entity\\UserRole.java",
+      "line": 29
+    },
+    {
+      "name": "FactCheckItem",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\voice\\application\\dto\\VoiceFactCheckResponse.java",
+      "line": 29
+    },
+    {
+      "name": "analyzeVoiceRecord",
+      "file": "src\\main\\java\\com\\service\\alaw\\platform\\voice\\presentation\\VoiceRecordController.java",
+      "line": 34
+    },
+    {
+      "name": "checkAccessToken",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\auth\\presentation\\AuthApi.java",
+      "line": 84
+    },
+    {
+      "name": "devLogin",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\auth\\presentation\\DevAuthApi.java",
+      "line": 27
+    },
+    {
+      "name": "corsConfigurationSource",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\config\\CorsConfig.java",
+      "line": 32
+    },
+    {
+      "name": "jwtSigningKey",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\config\\SecretKeyConfig.java",
+      "line": 21
+    },
+    {
+      "name": "securityFilterChain",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\config\\SecurityConfig.java",
+      "line": 52
+    },
+    {
+      "name": "handle",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\jwt\\filter\\JwtAuthenticationDeniedHandler.java",
+      "line": 36
+    },
+    {
+      "name": "commence",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\jwt\\filter\\JwtAuthenticationFailureHandler.java",
+      "line": 36
+    },
+    {
+      "name": "RequestInfo",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\jwt\\filter\\RequestMatcherHolder.java",
+      "line": 92
+    },
+    {
+      "name": "loadAuthorizationRequest",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\oauth2\\CookieOAuth2AuthorizationRequestRepository.java",
+      "line": 18
+    },
+    {
+      "name": "removeAuthorizationRequest",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\oauth2\\CookieOAuth2AuthorizationRequestRepository.java",
+      "line": 37
+    },
+    {
+      "name": "onAuthenticationFailure",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\oauth2\\handler\\OAuth2FailureHandler.java",
+      "line": 22
+    },
+    {
+      "name": "onAuthenticationSuccess",
+      "file": "src\\main\\java\\com\\service\\alaw\\security\\oauth2\\handler\\OAuth2SuccessHandler.java",
+      "line": 38
+    }
+  ],
+  "old_files": [],
+  "duplicate_prefix": []
+}

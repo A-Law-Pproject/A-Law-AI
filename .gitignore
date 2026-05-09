@@ -251,3 +251,20 @@ contract_uploads/
 # 프론트엔드
 # ============================================
 frontend/
+tests/
+scripts/
+results/
+
+# ============================================
+# LLMOps tracked files
+# ============================================
+!docs/LLMOPS_RUNBOOK.md
+!scripts/
+!scripts/llmops/
+!scripts/llmops/run_eval_suite.py
+!scripts/llmops/run_load_test.py
+!scripts/llmops/run_release_gate.py
+!scripts/monitor/
+!scripts/monitor/drift_detector.py
+!tests/
+!tests/test_llmops_metrics.py
