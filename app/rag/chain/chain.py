@@ -16,7 +16,16 @@ from langsmith.wrappers import wrap_openai
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.monitoring.metrics import LLM_LATENCY
-from app.rag.chain.prompts import CONTRACT_QA_PROMPT, RISK_PROMPT, CONTRACT_RISK_PROMPT, CLAUSE_ANALYSIS_PROMPT, CHAT_PROMPT, TERM_EXPLANATION_PROMPT
+from app.monitoring.llmops_metrics import observe_rag_interaction
+from app.rag.chain.prompts import (
+    CHAT_PROMPT,
+    CLAUSE_ANALYSIS_PROMPT,
+    COMPRESSION_PROMPT,
+    CONTRACT_QA_PROMPT,
+    CONTRACT_RISK_PROMPT,
+    RISK_PROMPT,
+    TERM_EXPLANATION_PROMPT,
+)
 from app.schemas.risk_analysis import ClauseRisk
 from app.rag.embedding.kure import KUREEmbeddings
 from app.rag.retriever.multi_retriever import (
@@ -29,6 +38,91 @@ from app.rag.retriever.multi_retriever import (
 from app.rag.retriever.query_expansion import expand_query_multi, async_expand_query_multi, expand_query_hyde, async_expand_query_hyde
 from app.rag.retriever.reranker import get_reranker
 from app.rag.vector_store.base import VectorDB
+
+# 조문 인용 검증: "주택임대차보호법 제6조의3 제1항" 등 패턴 추출
+_CITATION_RE = re.compile(
+    r"(주택임대차보호법|상가건물\s*임대차보호법|민법"
+    r"|민간임대주택에\s*관한\s*특별법|전세사기[^\s,。]*특별법)"
+    r"\s*(제\d+조(?:의\d+)?(?:\s*제\d+항)?(?:\s*제\d+호)?)"
+)
+
+
+def annotate_unverified_citations(answer: str, source_text: str) -> str:
+    """답변의 조문 인용이 검색 소스에 없으면 (미검증) 표시.
+
+    법령명과 기본 조문번호(제X조 또는 제X조의Y) 모두 source_text에 있어야 통과.
+    항/호 세부 번호는 검증 대상에서 제외 — 일부 문서에서 표기가 다를 수 있으므로.
+    """
+    src = re.sub(r"\s+", "", source_text)
+
+    def _check(m: re.Match) -> str:
+        law = re.sub(r"\s+", "", m.group(1))
+        article_raw = re.sub(r"\s+", "", m.group(2))
+        base_m = re.match(r"(제\d+조(?:의\d+)?)", article_raw)
+        base = base_m.group(1) if base_m else article_raw
+        if law in src and base in src:
+            return m.group(0)
+        return f"{m.group(0)}(미검증)"
+
+    return _CITATION_RE.sub(_check, answer)
+
+
+_LEGAL_COLLECTIONS = {"law_database", "law_statutes"}
+
+
+def _collect_cited_laws(documents: list[Document]) -> list[tuple[str, str]]:
+    """검색 문서에서 법령 인용 후보를 추출한다."""
+    cited: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for doc in documents:
+        meta = doc.metadata or {}
+        collection = str(meta.get("collection") or "")
+        law_name = str(meta.get("law_name") or "").strip()
+        article = str(meta.get("article") or meta.get("조문명") or "").strip()
+
+        if collection not in _LEGAL_COLLECTIONS and not law_name:
+            continue
+        if not law_name and not article:
+            continue
+
+        key = (law_name, article)
+        if key in seen:
+            continue
+        seen.add(key)
+        cited.append(key)
+
+    return cited
+
+
+async def compress_documents(
+    docs: list[Document],
+    query: str,
+    llm: ChatOpenAI,
+    min_length: int = 400,
+) -> list[Document]:
+    """긴 문서에서 질문 관련 부분만 LLM으로 추출 (Contextual Compression).
+
+    min_length 이하 문서는 그대로 통과.
+    압축 결과가 '관련없음'이면 목록에서 제외.
+    병렬 처리(asyncio.gather)로 레이턴시 최소화.
+    """
+    async def _one(doc: Document) -> Document | None:
+        if len(doc.page_content) <= min_length:
+            return doc
+        prompt = COMPRESSION_PROMPT.format(
+            query=query,
+            document=doc.page_content[:1500],
+        )
+        resp = await llm.ainvoke(prompt)
+        text = resp.content.strip()
+        if not text or text == "관련없음":
+            return None
+        return Document(page_content=text, metadata=doc.metadata)
+
+    results = await asyncio.gather(*[_one(d) for d in docs])
+    return [d for d in results if d is not None]
+
 
 @lru_cache(maxsize=1)
 def _get_token_encoder():
@@ -56,6 +150,8 @@ def build_context(documents: list[Document], max_length: int = 2000) -> str:
     for i, doc in enumerate(documents, 1):
         coll = doc.metadata.get("collection", "")
         header = f"[문서 {i} - {coll}]"
+        if doc.metadata.get("law_name"):
+            header += f" [{doc.metadata['law_name']}]"
         if doc.metadata.get("article"):
             header += f" {doc.metadata['article']}"
         if doc.metadata.get("title"):
@@ -148,6 +244,12 @@ def rag_query(
     prompt_text = CONTRACT_QA_PROMPT.format(context=context, question=question)
     with LLM_LATENCY.time():
         response = llm.invoke(prompt_text)
+    observe_rag_interaction(
+        endpoint="rag_query",
+        answer=response.content,
+        documents=docs,
+        context=context,
+    )
 
     return {
         "answer": response.content,
@@ -241,6 +343,12 @@ def detect_risk(
                 law_context=law_text,
             )
         )
+    observe_rag_interaction(
+        endpoint="detect_risk",
+        answer=analysis.content,
+        documents=[*illegal_results, *normal_results, *law_results],
+        context="\n".join([illegal_text, normal_text, law_text]),
+    )
 
     return {
         "illegal_similarity": illegal_score,
@@ -383,6 +491,12 @@ async def _detect_risk_legacy(
         )
     )
     LLM_LATENCY.observe(time.perf_counter() - _llm_start)
+    observe_rag_interaction(
+        endpoint="detect_risk_contract_legacy",
+        answer=response.content,
+        documents=[*illegal_results, *normal_results, *law_results],
+        context="\n".join([illegal_text, normal_text, law_text]),
+    )
 
     try:
         content = response.content.strip()
@@ -523,6 +637,8 @@ async def chat_rag(
     collections: list[str] | None = None,
     k_per_collection: int | dict[str, int] | None = None,
     use_hyde: bool = True,
+    use_multiquery: bool = False,
+    use_compression: bool = False,
 ) -> dict:
     """대화 이력을 포함한 RAG 챗봇 (병렬 검색 + Reranker).
 
@@ -539,9 +655,12 @@ async def chat_rag(
         contract_context: 사용자가 현재 보고 있는 계약서 텍스트 (선택).
         collections: 검색할 컬렉션 리스트. None이면 전체 5개 컬렉션 사용.
         k_per_collection: 컬렉션당 검색 수. None이면 임대차 여부에 따라 자동 결정.
+        use_multiquery: HyDE와 병행하여 쿼리 변형 2개를 추가 검색.
+        use_compression: Contextual Compression — 긴 문서에서 관련 부분만 추출.
 
     Returns:
-        {"answer": str, "sources": list[str], "context": str}
+        {"answer": str, "sources": list[str], "context": str,
+         "source_documents": list[Document]}
     """
     if collections is None:
         collections = _CHAT_COLLECTIONS
@@ -559,32 +678,82 @@ async def chat_rag(
     if law_statutes_filter and "law_statutes" in collections:
         collection_filters["law_statutes"] = law_statutes_filter
 
-    # 1. HyDE: 가상 답변 생성 → 임베딩을 검색 벡터로 사용
+    # 1. 쿼리 확장: HyDE + Multi-query 병렬 생성
+    expand_coros: list = []
     if use_hyde:
-        hyde_text = await async_expand_query_hyde(message, llm)
-        hyde_vector = await asyncio.to_thread(embeddings.embed_query, hyde_text)
-    else:
-        hyde_vector = None
+        expand_coros.append(async_expand_query_hyde(message, llm))
+    if use_multiquery:
+        expand_coros.append(async_expand_query_multi(message, llm, n=2))
 
-    # 2. 병렬 RAG 검색 (HyDE 벡터 있으면 우선 사용, 없으면 message 임베딩)
-    docs = await async_search_multi_index(
-        client, embeddings, message,
+    expand_results = await asyncio.gather(*expand_coros) if expand_coros else []
+
+    hyde_vector: list[float] | None = None
+    mq_variants: list[str] = []
+    _idx = 0
+    if use_hyde and expand_results:
+        hyde_vector = await asyncio.to_thread(embeddings.embed_query, expand_results[_idx])
+        _idx += 1
+    if use_multiquery and _idx < len(expand_results):
+        mq_variants = expand_results[_idx][1:]  # 원본 제외, 변형 쿼리만
+
+    # 2. 병렬 검색: HyDE 기반 메인 + Multi-query 변형 쿼리들
+    _score_threshold = {
+        "law_database": 0.15,
+        "law_statutes": 0.15,
+        "special_clauses_illegal": 0.45,
+        "special_clauses_normal": 0.4,
+        "default": 0.25,
+    }
+    _search_kwargs = dict(
         collections=collections,
         k_per_collection=k_per_collection,
-        score_threshold={
-            "law_database": 0.25,             # 법률 조문·판례는 관대하게 수집
-            "law_statutes": 0.25,             # 법령 원문도 관대하게 수집
-            "special_clauses_illegal": 0.45,  # 독소조항은 고유사도 문서만
-            "special_clauses_normal": 0.4,
-            "default": 0.25,
-        },
+        score_threshold=_score_threshold,
         collection_filters=collection_filters or None,
-        query_vector=hyde_vector,
     )
+    search_coros = [
+        async_search_multi_index(client, embeddings, message, **_search_kwargs, query_vector=hyde_vector),
+        *[
+            async_search_multi_index(client, embeddings, q, **_search_kwargs)
+            for q in mq_variants
+        ],
+    ]
+    search_results = await asyncio.gather(*search_coros)
+    all_docs: list[Document] = [doc for r in search_results for doc in r]
+    docs = _deduplicate(all_docs)
+    docs.sort(key=lambda d: d.metadata.get("score", 0), reverse=True)
 
     # 3. BGE Reranker: 법령 조문 관련성 기준으로 재정렬 (상위 7개 선별)
     if docs:
         docs = await get_reranker().async_rerank(message, docs, top_n=7)
+
+    if not _collect_cited_laws(docs):
+        legal_collections = [c for c in collections if c in _LEGAL_COLLECTIONS]
+        if legal_collections:
+            fallback_query = f"{message}\n관련 법령 조문과 직접 적용 근거"
+            fallback_docs = await async_search_multi_index(
+                client,
+                embeddings,
+                fallback_query,
+                collections=legal_collections,
+                k_per_collection={"law_database": 5, "law_statutes": 5},
+                score_threshold={"law_database": 0.15, "law_statutes": 0.15, "default": 0.15},
+                collection_filters=collection_filters or None,
+            )
+            if fallback_docs:
+                logger.debug(
+                    "[chat_rag] 법령 인용 후보가 비어 fallback 검색 수행: {}건",
+                    len(fallback_docs),
+                )
+                fallback_docs = await get_reranker().async_rerank(message, fallback_docs, top_n=5)
+                docs = _deduplicate(docs + fallback_docs)
+                docs = await get_reranker().async_rerank(message, docs, top_n=7)
+
+    # citation verification은 rerank 직후 원본 텍스트로 수행
+    verification_source = "\n".join(d.page_content for d in docs)
+
+    # 4. Contextual Compression: 긴 문서에서 질문 관련 부분만 추출
+    if use_compression and docs:
+        docs = await compress_documents(docs, message, llm)
 
     context = build_context(docs, max_length=3000)  # 법령 조문 전문 수용
 
@@ -610,18 +779,28 @@ async def chat_rag(
     response = await llm.ainvoke(prompt_messages)
     LLM_LATENCY.observe(time.perf_counter() - _llm_start)
 
-    # 5. 출처 요약 (상위 3개)
+    # 5. Citation Verification: 검색 소스에 없는 조문 인용에 (미검증) 표시
+    answer = annotate_unverified_citations(response.content, verification_source)
+    observe_rag_interaction(
+        endpoint="chat_rag",
+        answer=answer,
+        documents=docs,
+        context=context,
+    )
+
+    # 6. 출처 요약 (상위 3개)
     sources = []
     for doc in docs[:3]:
         meta = doc.metadata
-        label = meta.get("article") or meta.get("title") or meta.get("category") or ""
+        parts = [p for p in [meta.get("law_name"), meta.get("article") or meta.get("title") or meta.get("category")] if p]
         coll = meta.get("collection", "")
-        sources.append(f"[{coll}] {label}".strip(" []"))
+        sources.append(f"[{coll}] {' '.join(parts)}".strip(" []"))
 
     return {
-        "answer": response.content,
+        "answer": answer,
         "sources": sources,
         "context": context,
+        "source_documents": docs,
     }
 
 
@@ -659,7 +838,7 @@ async def explain_term_rag(
         client, embeddings, search_query,
         collections=["law_database", "law_statutes"],
         k_per_collection=4,
-        score_threshold=0.25,
+        score_threshold=0.15,
         collection_filters=collection_filters or None,
     )
     law_context = build_context(docs, max_length=2000) or "관련 법률 문서를 찾을 수 없습니다."
@@ -674,6 +853,12 @@ async def explain_term_rag(
     _llm_start = time.perf_counter()
     response = await llm.ainvoke(prompt_text)
     LLM_LATENCY.observe(time.perf_counter() - _llm_start)
+    observe_rag_interaction(
+        endpoint="explain_term_rag",
+        answer=response.content,
+        documents=docs,
+        context=law_context,
+    )
 
     try:
         content = response.content.strip()
