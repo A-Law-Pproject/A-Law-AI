@@ -11,6 +11,7 @@ locust>=2.31.0
 
 # Evaluation
 ragas>=0.2.0
+mlflow>=2.16.0
 
 # Offline data loading
 xlrd>=2.0.1

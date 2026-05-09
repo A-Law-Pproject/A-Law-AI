@@ -7,16 +7,15 @@ A-LAW FastAPI 부하 테스트
 
 Web UI: http://localhost:8089
 
-단계별 부하:
-    Step 1 (0~2분):  VU=3,  spawn=1/s → 안정성 확인
-    Step 2 (2~7분):  VU=10, spawn=1/s → 피크 타임 시뮬레이션
-    Step 3 (7~13분): VU=20, spawn=2/s → CPU 병목 한계점 측정
+프로필:
+    ALAW_LOCUST_PROFILE=smoke  → 빠른 사전 점검
+    ALAW_LOCUST_PROFILE=staged → 기본 단계형 부하 (기본값)
+    ALAW_LOCUST_PROFILE=peak   → 공격적 피크 테스트
 """
-import json
+import os
 import random
 
 from locust import HttpUser, LoadTestShape, task, between, events
-from locust.runners import MasterRunner
 
 
 # ──────────────────────────────────────────
@@ -47,6 +46,27 @@ CHAT_MESSAGES = [
     "계약서에 특약사항을 어떻게 작성해야 안전한가요?",
     "전입신고와 확정일자의 차이가 무엇인가요?",
 ]
+
+LOAD_PROFILES = {
+    "smoke": [
+        {"cumulative": 30, "users": 2, "spawn_rate": 1},
+        {"cumulative": 90, "users": 4, "spawn_rate": 1},
+        {"cumulative": 150, "users": 6, "spawn_rate": 1},
+    ],
+    "staged": [
+        {"cumulative": 120, "users": 3, "spawn_rate": 1},
+        {"cumulative": 420, "users": 10, "spawn_rate": 1},
+        {"cumulative": 780, "users": 20, "spawn_rate": 2},
+    ],
+    "peak": [
+        {"cumulative": 60, "users": 5, "spawn_rate": 1},
+        {"cumulative": 240, "users": 15, "spawn_rate": 2},
+        {"cumulative": 480, "users": 30, "spawn_rate": 3},
+    ],
+}
+
+ACTIVE_PROFILE = os.getenv("ALAW_LOCUST_PROFILE", "staged").strip().lower()
+ACTIVE_STAGES = LOAD_PROFILES.get(ACTIVE_PROFILE, LOAD_PROFILES["staged"])
 
 
 # ──────────────────────────────────────────
@@ -116,20 +136,9 @@ class ContractUser(HttpUser):
 # ──────────────────────────────────────────
 
 class StepLoadShape(LoadTestShape):
-    """
-    가천대 계약 시즌 피크 타임 시뮬레이션
+    """환경변수 프로필에 따라 단계형 부하를 적용한다."""
 
-    cumulative_duration(s) | users | spawn_rate
-    ───────────────────────────────────────────
-      0 ~ 120  (2분)       |   3   | 1/s  → Step 1: 안정성
-    120 ~ 420  (5분)       |  10   | 1/s  → Step 2: 피크 타임
-    420 ~ 780  (6분)       |  20   | 2/s  → Step 3: 한계 측정
-    """
-    stages = [
-        {"cumulative": 120,  "users": 3,  "spawn_rate": 1},
-        {"cumulative": 420,  "users": 10, "spawn_rate": 1},
-        {"cumulative": 780,  "users": 20, "spawn_rate": 2},
-    ]
+    stages = ACTIVE_STAGES
 
     def tick(self):
         run_time = self.get_run_time()
@@ -149,6 +158,7 @@ def on_quitting(environment, **kwargs):
     total = stats.total
     print("\n" + "=" * 60)
     print("📊 A-LAW 부하 테스트 결과 요약")
+    print(f"프로필: {ACTIVE_PROFILE}")
     print("=" * 60)
     print(f"  총 요청 수     : {total.num_requests:,}")
     print(f"  실패 요청 수   : {total.num_failures:,}")
