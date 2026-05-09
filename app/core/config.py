@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # Upstage API (OCR용)
     UPSTAGE_API_KEY: str = ""
 
+    # Naver Clova OCR (대체 OCR 엔진)
+    CLOVA_OCR_API_URL: str = ""         # https://{apigw}.ntruss.com/custom/v1/{domain_id}/{invoke_key}/general
+    CLOVA_OCR_SECRET_KEY: str = ""      # NCloud Console > CLOVA OCR > Secret Key
+
     # Pinecone
     PINECONE_API_KEY: str = ""
     PINECONE_INDEX: str = "alaw-legal"
@@ -71,6 +75,25 @@ class Settings(BaseSettings):
     EVIDENCE_SIMILARITY_THRESHOLD: float = 0.75  # 조항-발화 연결 유사도 임계값
     MONGODB_VOICE_EVIDENCE_COLLECTION: str = "voice_evidence_meta"  # 원본성 메타데이터 컬렉션
     MONGODB_EVIDENCE_GRAPH_COLLECTION: str = "evidence_graphs"  # 증거 그래프 저장 컬렉션
+    MONGODB_VOICE_ANALYSIS_COLLECTION: str = "voice_analysis_results"  # standalone 분석 결과
+    MONGODB_VOICE_FACT_CHECK_COLLECTION: str = "voice_fact_check_results"  # 팩트체크 결과
+
+    # PII 마스킹 설정
+    ENABLE_MASKING: bool = True   # 마스킹 기능 ON/OFF 토글 (.env에서 ENABLE_MASKING=false로 비활성화)
+    MASKING_VERSION: str = "1.0"  # 마스킹 엔진 버전 (MongoDB 메타데이터에 기록)
+
+    # 표 텍스트 후처리 설정
+    ENABLE_LLM_TABLE_FIX: bool = False  # LLM 기반 표 줄바꿈 오류 보정 (비용 발생, .env에서 활성화)
+
+    # LLMOps 설정
+    ENABLE_LLMOPS_METRICS: bool = True
+    LLMOPS_METRIC_SAMPLE_RATE: float = 1.0
+    LLMOPS_MIN_LEGAL_CITATION_RATE: float = 0.60
+    LLMOPS_MAX_REJECTION_RATE: float = 0.10
+    LLMOPS_MAX_EMPTY_CONTEXT_RATE: float = 0.20
+    LLMOPS_MIN_AVG_RERANKER_SCORE: float = -3.0
+    MLFLOW_TRACKING_URI: str = "file:./mlruns"
+    MLFLOW_EXPERIMENT_NAME: str = "a-law-llmops"
 
     # 일반 설정
     DEBUG: bool = False
@@ -85,6 +108,11 @@ class Settings(BaseSettings):
             if normalized in {"debug", "dev", "development", "true", "1", "yes", "on"}:
                 return True
         return value
+
+    @field_validator("LLMOPS_METRIC_SAMPLE_RATE")
+    @classmethod
+    def validate_llmops_sample_rate(cls, value: float) -> float:
+        return min(max(float(value), 0.0), 1.0)
 
 
 settings = Settings()

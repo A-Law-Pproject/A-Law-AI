@@ -1,5 +1,5 @@
 {
-  "title": "A-LAW RAG 성능 모니터링",
+  "title": "A-LAW RAG + LLMOps 모니터링",
   "uid": "alaw-rag-dashboard",
   "schemaVersion": 39,
   "version": 1,
@@ -286,6 +286,114 @@
           "thresholds": {
             "steps": [
               { "color": "blue", "value": null }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 12,
+      "title": "법령 인용률",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(rag_legal_citation_total{has_citation=\"true\"}[5m])) by (endpoint) / clamp_min(sum(rate(rag_legal_citation_total[5m])) by (endpoint), 0.001)",
+          "legendFormat": "{{endpoint}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "green", "value": 80 }
+            ]
+          },
+          "custom": { "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "회피 응답률 / 빈 컨텍스트율",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(rag_refusal_response_total{is_refusal=\"true\"}[5m])) by (endpoint) / clamp_min(sum(rate(rag_refusal_response_total[5m])) by (endpoint), 0.001)",
+          "legendFormat": "회피 {{endpoint}}",
+          "refId": "A"
+        },
+        {
+          "expr": "100 * sum(rate(rag_empty_context_total{is_empty_context=\"true\"}[5m])) by (endpoint) / clamp_min(sum(rate(rag_empty_context_total[5m])) by (endpoint), 0.001)",
+          "legendFormat": "빈컨텍스트 {{endpoint}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 20 }
+            ]
+          },
+          "custom": { "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "평균 Reranker Score",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(rag_reranker_score_sum[5m])) by (endpoint) / clamp_min(sum(rate(rag_reranker_score_count[5m])) by (endpoint), 0.001)",
+          "legendFormat": "{{endpoint}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": -3 },
+              { "color": "green", "value": -1 }
+            ]
+          },
+          "custom": { "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Retrieval Hit Rate",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 36, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(rag_retrieval_hit_total{has_documents=\"true\"}[5m])) / clamp_min(sum(rate(rag_retrieval_hit_total[5m])), 0.001)",
+          "legendFormat": "Hit Rate (%)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "green", "value": 90 }
             ]
           }
         }
