@@ -93,7 +93,37 @@ async def save_audio_meta(meta: VoiceAudioMeta) -> str:
         return inserted_id
     except Exception as e:
         logger.error(f"MongoDB audio metadata save failed: {e}")
-        raise
+        return ""
+
+
+async def save_voice_analysis_result(doc: dict) -> str:
+    """Standalone 분석 결과를 voice_analysis_results 컬렉션에 저장한다."""
+    try:
+        client = get_mongo_client()
+        collection = client[settings.MONGODB_DB][settings.MONGODB_VOICE_ANALYSIS_COLLECTION]
+        doc["savedAt"] = datetime.now(timezone.utc).isoformat()
+        result = await collection.insert_one(doc)
+        inserted_id = str(result.inserted_id)
+        logger.info(f"Voice analysis result saved: _id={inserted_id}")
+        return inserted_id
+    except Exception as e:
+        logger.error(f"MongoDB voice analysis result save failed: {e}")
+        return ""
+
+
+async def save_voice_fact_check_result(doc: dict) -> str:
+    """팩트체크 결과를 voice_fact_check_results 컬렉션에 저장한다."""
+    try:
+        client = get_mongo_client()
+        collection = client[settings.MONGODB_DB][settings.MONGODB_VOICE_FACT_CHECK_COLLECTION]
+        doc["savedAt"] = datetime.now(timezone.utc).isoformat()
+        result = await collection.insert_one(doc)
+        inserted_id = str(result.inserted_id)
+        logger.info(f"Voice fact-check result saved: _id={inserted_id}")
+        return inserted_id
+    except Exception as e:
+        logger.error(f"MongoDB voice fact-check result save failed: {e}")
+        return ""
 
 
 async def process_and_store_audio(

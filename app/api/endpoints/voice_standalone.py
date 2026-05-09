@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from loguru import logger
 
 from app.schemas.voice_standalone import VoiceAnalyzeS3Request, VoiceAnalysisResponse
-from app.services.voice.hash_service import download_from_s3, process_and_store_audio
+from app.services.voice.hash_service import download_from_s3, process_and_store_audio, save_voice_analysis_result
 from app.services.voice.standalone_analysis_service import summarize_voice_analysis
 from app.services.voice.stt_service import transcribe_and_extract
 
@@ -45,6 +45,17 @@ async def _analyze_uploaded_voice(
         transcript = " ".join(seg.text for seg in segments).strip()
         summary = await summarize_voice_analysis(transcript, agreements, segments)
 
+        elapsed_ms = int(time.time() * 1000) - start_ms
+        await save_voice_analysis_result({
+            "source_id": source_id,
+            "audio_hash": audio_meta.file_hash,
+            "s3_key": audio_meta.s3_key,
+            "transcript": transcript,
+            "summary": summary.model_dump(mode="json"),
+            "agreements": [a.model_dump(mode="json") for a in agreements],
+            "processing_time_ms": elapsed_ms,
+        })
+
         return VoiceAnalysisResponse(
             success=True,
             transcript=transcript,
@@ -52,7 +63,7 @@ async def _analyze_uploaded_voice(
             segments=segments,
             agreements=agreements,
             audio_meta=audio_meta,
-            processing_time_ms=int(time.time() * 1000) - start_ms,
+            processing_time_ms=elapsed_ms,
         )
     except HTTPException:
         raise
@@ -89,6 +100,17 @@ async def _analyze_s3_voice(request: VoiceAnalyzeS3Request) -> VoiceAnalysisResp
             content_type=_ext_to_content_type(filename),
         )
 
+        elapsed_ms = int(time.time() * 1000) - start_ms
+        await save_voice_analysis_result({
+            "source_id": request.source_id or "standalone",
+            "audio_hash": audio_meta.file_hash,
+            "s3_key": audio_meta.s3_key,
+            "transcript": transcript,
+            "summary": summary.model_dump(mode="json"),
+            "agreements": [a.model_dump(mode="json") for a in agreements],
+            "processing_time_ms": elapsed_ms,
+        })
+
         return VoiceAnalysisResponse(
             success=True,
             transcript=transcript,
@@ -96,7 +118,7 @@ async def _analyze_s3_voice(request: VoiceAnalyzeS3Request) -> VoiceAnalysisResp
             segments=segments,
             agreements=agreements,
             audio_meta=audio_meta,
-            processing_time_ms=int(time.time() * 1000) - start_ms,
+            processing_time_ms=elapsed_ms,
         )
     except HTTPException:
         raise

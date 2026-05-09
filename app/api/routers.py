@@ -10,35 +10,35 @@ api_router = APIRouter()
 api_router.include_router(
     contract.router,
     prefix="/contracts",
-    tags=["怨꾩빟??遺꾩꽍"],
+    tags=["계약서 분석"],
 )
 
 api_router.include_router(
     ocr.router,
     prefix="/contracts",
-    tags=["怨꾩빟??OCR"],
+    tags=["계약서 OCR"],
 )
 
 api_router.include_router(
     rag.router,
     prefix="/contracts",
-    tags=["怨꾩빟??遺꾩꽍"],
+    tags=["계약서 분석"],
 )
 
 api_router.include_router(
     chat.router,
     prefix="/chat",
-    tags=["梨쀫큸"],
+    tags=["챗봇"],
 )
 
 api_router.include_router(
     voice_standalone.router,
     prefix="/voice",
-    tags=["?뚯꽦 遺꾩꽍"],
+    tags=["음성 분석"],
 )
 
 api_router.include_router(
     voice_standalone.legacy_router,
     prefix="/voice",
-    tags=["?뚯꽦 遺꾩꽍"],
+    tags=["음성 분석"],
 )

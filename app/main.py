@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.routers import api_router
 from app.services.rabbitmq_consumer import start_consumer, stop_consumer, consumer
-from app.services.voice_contract_fact_check_consumer import (
+from app.services.voice.fact_check_consumer import (
     start_voice_contract_fact_check_consumer,
     stop_voice_contract_fact_check_consumer,
 )

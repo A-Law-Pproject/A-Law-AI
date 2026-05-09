@@ -21,6 +21,7 @@ from app.services.voice.contract_fact_check_service import (
     run_voice_only_analysis,
     transcribe_audio_from_request,
 )
+from app.services.voice.hash_service import save_voice_fact_check_result
 
 
 class VoiceContractFactCheckConsumer:
@@ -171,6 +172,15 @@ class VoiceContractFactCheckConsumer:
             request = VoiceContractFactCheckRequest(**body)
             result = await self._process(request, start_ms)
             await self._publish_result(result)
+            await save_voice_fact_check_result({
+                "voiceRecordId": result.voiceRecordId,
+                "contractId": result.contractId,
+                "jobId": result.jobId,
+                "status": result.status,
+                "transcript": result.transcript,
+                "factCheckItems": [item.model_dump(mode="json") for item in (result.factCheckItems or [])],
+                "processingTimeMs": result.processingTimeMs,
+            })
             logger.info(
                 "[VoiceContractFactCheckConsumer] Completed: "
                 f"voiceRecordId={voice_record_id}, jobId={job_id}"
@@ -178,32 +188,19 @@ class VoiceContractFactCheckConsumer:
 
         except json.JSONDecodeError as e:
             logger.error(f"[VoiceContractFactCheckConsumer] JSON parse error: {e}")
-            await self._publish_error(
-                voice_record_id,
-                contract_id,
-                job_id,
-                f"JSON parse error: {e}",
-                start_ms,
-            )
+            await self._publish_error(voice_record_id, contract_id, job_id, f"JSON parse error: {e}", start_ms)
         except Exception as e:
             logger.exception(
                 "[VoiceContractFactCheckConsumer] Processing error: "
                 f"{type(e).__name__}: {e}"
             )
-            await self._publish_error(
-                voice_record_id,
-                contract_id,
-                job_id,
-                f"{type(e).__name__}: {e}",
-                start_ms,
-            )
+            await self._publish_error(voice_record_id, contract_id, job_id, f"{type(e).__name__}: {e}", start_ms)
 
     async def _process(
         self,
         request: VoiceContractFactCheckRequest,
         start_ms: int,
     ) -> VoiceContractFactCheckResult:
-        """Run the async fact-check pipeline for one message."""
         contract_text, transcript = await asyncio.gather(
             resolve_contract_text(request),
             transcribe_audio_from_request(request),
@@ -215,17 +212,13 @@ class VoiceContractFactCheckConsumer:
             f"mode={'fact-check' if contract_text else 'voice-only'}"
         )
 
-        if contract_text:
-            fact_check_items = await run_fact_check(transcript, contract_text)
-        else:
-            fact_check_items = await run_voice_only_analysis(transcript)
-
-        logger.info(
-            "[VoiceContractFactCheckConsumer] Analysis completed: "
-            f"{len(fact_check_items)} items"
+        fact_check_items = (
+            await run_fact_check(transcript, contract_text)
+            if contract_text
+            else await run_voice_only_analysis(transcript)
         )
 
-        elapsed_ms = int(time.time() * 1000) - start_ms
+        logger.info(f"[VoiceContractFactCheckConsumer] Analysis completed: {len(fact_check_items)} items")
 
         return VoiceContractFactCheckResult(
             voiceRecordId=request.voiceRecordId,
@@ -234,19 +227,16 @@ class VoiceContractFactCheckConsumer:
             status="COMPLETED",
             transcript=transcript,
             factCheckItems=fact_check_items,
-            processingTimeMs=elapsed_ms,
+            processingTimeMs=int(time.time() * 1000) - start_ms,
         )
 
     async def _publish_result(self, result: VoiceContractFactCheckResult):
         if not self.result_exchange:
-            raise RuntimeError(
-                "[VoiceContractFactCheckConsumer] Result exchange not initialized"
-            )
+            raise RuntimeError("[VoiceContractFactCheckConsumer] Result exchange not initialized")
 
-        body = result.model_dump(mode="json")
         await self.result_exchange.publish(
             Message(
-                body=json.dumps(body, ensure_ascii=False).encode(),
+                body=json.dumps(result.model_dump(mode="json"), ensure_ascii=False).encode(),
                 content_type="application/json",
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             ),
@@ -257,30 +247,19 @@ class VoiceContractFactCheckConsumer:
             f"voiceRecordId={result.voiceRecordId}, jobId={result.jobId}"
         )
 
-    async def _publish_error(
-        self,
-        voice_record_id: int,
-        contract_id: int,
-        job_id: str,
-        error_message: str,
-        start_ms: int,
-    ):
-        elapsed_ms = int(time.time() * 1000) - start_ms
+    async def _publish_error(self, voice_record_id: int, contract_id: int, job_id: str, error_message: str, start_ms: int):
         error_result = VoiceContractFactCheckResult(
             voiceRecordId=voice_record_id,
             contractId=contract_id,
             jobId=job_id,
             status="FAILED",
-            processingTimeMs=elapsed_ms,
+            processingTimeMs=int(time.time() * 1000) - start_ms,
             errorMessage=error_message,
         )
         try:
             await self._publish_result(error_result)
         except Exception as e:
-            logger.error(
-                "[VoiceContractFactCheckConsumer] Failed to publish error result: "
-                f"{e}"
-            )
+            logger.error(f"[VoiceContractFactCheckConsumer] Failed to publish error result: {e}")
 
     async def stop(self):
         self._running = False
@@ -314,10 +293,3 @@ async def start_voice_contract_fact_check_consumer():
 
 async def stop_voice_contract_fact_check_consumer():
     await voice_contract_fact_check_consumer.stop()
-
-
-# Compatibility aliases for the previous mixed naming.
-VoiceRabbitMQConsumer = VoiceContractFactCheckConsumer
-voice_consumer = voice_contract_fact_check_consumer
-start_voice_consumer = start_voice_contract_fact_check_consumer
-stop_voice_consumer = stop_voice_contract_fact_check_consumer

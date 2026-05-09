@@ -8,6 +8,7 @@ STT (음성→텍스트) 서비스
 import re
 import asyncio
 import io
+import json
 from typing import List, Optional
 
 from loguru import logger
@@ -185,22 +186,64 @@ async def transcribe_audio(
         raise RuntimeError(f"STT 처리 실패: {e}") from e
 
 
+_SPEAKER_IDENTIFY_PROMPT = """다음은 임대차 계약 관련 음성 녹음의 전사 세그먼트 목록입니다.
+각 세그먼트의 화자를 "임대인" 또는 "임차인"으로 분류하세요.
+
+화자 구분 기준:
+- 임대인: 집주인, 공간을 제공하는 쪽, 보증금/임대료를 받는 쪽
+- 임차인: 세입자, 공간을 빌리는 쪽, 보증금/임대료를 내는 쪽
+- 확실하지 않으면 대화 흐름상 앞뒤 문맥으로 추론하세요
+- 화자가 한 명뿐이라면 모두 "알수없음"으로 반환하세요
+
+세그먼트:
+{segments_json}
+
+JSON 배열만 반환 (다른 텍스트 없이):
+[{{"id": "seg_0", "speaker": "임대인"}}, ...]"""
+
+
+async def identify_speakers(segments: List[SegmentResult]) -> List[SegmentResult]:
+    """GPT로 각 세그먼트의 화자를 임대인/임차인으로 분류한다."""
+    if not segments:
+        return segments
+
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    segments_input = [{"id": seg.id, "text": seg.text} for seg in segments]
+    prompt = _SPEAKER_IDENTIFY_PROMPT.replace(
+        "{segments_json}", json.dumps(segments_input, ensure_ascii=False)
+    )
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+
+        speaker_map = {item["id"]: item["speaker"] for item in json.loads(content)}
+        for seg in segments:
+            seg.speaker = speaker_map.get(seg.id)
+        logger.info(f"화자 분류 완료: {len(speaker_map)}개 세그먼트")
+    except Exception as e:
+        logger.warning(f"화자 분류 실패, speaker=None 유지: {e}")
+
+    return segments
+
+
 async def transcribe_and_extract(
     file_bytes: bytes,
     filename: str = "audio.mp3",
     language: str = "ko",
 ) -> tuple[List[SegmentResult], List[AgreementItem]]:
-    """
-    STT 전사 후 합의 항목까지 한번에 추출하는 편의 함수.
-
-    Args:
-        file_bytes: 음성 파일 바이트
-        filename: 파일명
-        language: 전사 언어
-
-    Returns:
-        (SegmentResult 목록, AgreementItem 목록) 튜플
-    """
+    """STT 전사 → 화자 분류 → 합의 항목 추출을 한번에 수행한다."""
     segments = await transcribe_audio(file_bytes, filename, language)
-    agreements = await asyncio.to_thread(extract_agreements_from_segments, segments)
+    segments, agreements = await asyncio.gather(
+        identify_speakers(segments),
+        asyncio.to_thread(extract_agreements_from_segments, segments),
+    )
     return segments, agreements

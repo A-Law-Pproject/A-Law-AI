@@ -5,22 +5,26 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.risk_analysis import ClauseRisk, ContractRiskResult
 from app.schemas.voice_shared import AgreementItem, SegmentResult, VoiceAudioMeta
 
 
-class VoiceRiskItem(BaseModel):
-    risk_type: str = Field(..., description="Detected risk category")
-    severity: str = Field(..., description="low/medium/high/critical")
-    detail: str = Field(..., description="Why this may be risky")
-    timestamp_str: str = Field(default="", description="Related transcript timestamp")
+class VoiceClauseRisk(ClauseRisk):
+    """ClauseRisk에 음성 타임스탬프를 추가한 확장형."""
+    timestamp_str: str = Field(default="", description="발화 타임스탬프 HH:MM:SS")
 
 
 class VoiceAnalysisSummary(BaseModel):
     summary: str = Field(..., description="High-level transcript summary")
     key_points: List[str] = Field(default_factory=list, description="Important points")
-    risk_items: List[VoiceRiskItem] = Field(
-        default_factory=list,
-        description="Detected risks",
+    risk_analysis: ContractRiskResult = Field(
+        default_factory=lambda: ContractRiskResult(
+            overall_risk_score=0,
+            risk_summary={"Risk": 0, "Caution": 0, "Safety": 0},
+            total_clauses=0,
+            clauses=[],
+        ),
+        description="위험도 분석 결과 (기존 risk 서비스와 동일 포맷)",
     )
 
 
