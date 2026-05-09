@@ -1,5 +1,8 @@
 """
-OCR 서비스 - Upstage OCR 파이프라인 래퍼
+OCR 서비스 - 엔진 선택형 래퍼
+
+아래 'OCR 엔진 선택' 블록에서 사용할 엔진 하나만 활성화하고
+나머지는 주석 처리하세요. 서버 재시작 후 즉시 적용됩니다.
 """
 import time
 import cv2
@@ -7,101 +10,88 @@ import numpy as np
 from loguru import logger
 
 from app.schemas.ocr_response import ContractOCRResponse
+from app.core.config import settings
 
 
 def bytes_to_cv2(image_bytes: bytes):
     """바이트를 OpenCV 이미지로 변환"""
     try:
         nparr = np.frombuffer(image_bytes, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        return image
+        return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     except Exception as e:
         logger.error(f"이미지 변환 실패: {e}")
         return None
 
 
-# Upstage OCR 파이프라인 초기화
-upstage_pipeline = None
+# ================================================================
+# OCR 엔진 선택 — 하나만 활성화, 나머지는 주석 처리
+# ================================================================
 
-try:
-    from app.ocr.upstage_ocr import UpstageOCRPipeline
-    upstage_pipeline = UpstageOCRPipeline()
-    logger.info("Upstage OCR 파이프라인 초기화 완료")
-except ImportError as e:
-    logger.warning(f"Upstage OCR 파이프라인 로드 실패: {e}")
-except Exception as e:
-    logger.warning(f"Upstage 파이프라인 초기화 실패: {e}")
+# ── ① Upstage Document Parse (기본값) ───────────────────────────
+from app.ocr.upstage_ocr import UpstageOCRPipeline
+_ocr_pipeline = UpstageOCRPipeline()
+
+# ── ② Naver Clova OCR ───────────────────────────────────────────
+# from app.ocr.clova_ocr import ClovaOCRPipeline
+# _ocr_pipeline = ClovaOCRPipeline()
+
+# ================================================================
+
+
+logger.info(f"OCR 엔진 초기화 완료: {type(_ocr_pipeline).__name__}")
 
 
 class OCRService:
-    """OCR 처리 서비스 (Upstage 전용)"""
+    """OCR 처리 서비스 (엔진 독립적)"""
 
     def process_and_map(
         self,
         image_bytes: bytes,
         structurize: bool,
-        include_overlay: bool
+        include_overlay: bool,
     ) -> ContractOCRResponse:
         """
-        이미지를 OCR 처리하고 응답 DTO로 매핑
+        이미지를 OCR 처리하고 응답 DTO로 매핑.
 
         Args:
-            image_bytes: 이미지 바이트
-            structurize: 구조화 여부 (GPT로 JSON 변환)
-            include_overlay: 오버레이 포함 여부 (블록 좌표)
+            image_bytes    : 이미지 바이트
+            structurize    : GPT 구조화 수행 여부
+            include_overlay: 단어별 바운딩 박스 포함 여부
 
         Returns:
             ContractOCRResponse
         """
-        if upstage_pipeline is None:
-            raise RuntimeError("OCR 파이프라인이 초기화되지 않았습니다. UPSTAGE_API_KEY와 OPENAI_API_KEY를 확인하세요.")
-
         start_time = time.time()
 
-        # 이미지 크기 확인
         image = bytes_to_cv2(image_bytes)
         if image is None:
             raise ValueError("이미지 디코딩 실패")
-
         h, w = image.shape[:2]
 
-        # Upstage 파이프라인 실행
-        result = upstage_pipeline.process(
+        result = _ocr_pipeline.process(
             image_bytes=image_bytes,
             image_width=w,
             image_height=h,
-            structurize=structurize
+            structurize=structurize,
+            enable_llm_table_fix=settings.ENABLE_LLM_TABLE_FIX,
         )
 
-        # DTO 매핑
-        processing_time = round(time.time() - start_time, 2)
-        return ContractOCRResponse.from_result(result, processing_time, include_overlay)
+        return ContractOCRResponse.from_result(
+            result, round(time.time() - start_time, 2), include_overlay
+        )
 
     def extract_text_only(self, image_bytes: bytes) -> str:
-        """
-        이미지에서 텍스트만 추출 (분석용)
-
-        Args:
-            image_bytes: 이미지 바이트
-
-        Returns:
-            추출된 텍스트
-        """
-        if upstage_pipeline is None:
-            raise RuntimeError("OCR 파이프라인이 초기화되지 않았습니다. UPSTAGE_API_KEY와 OPENAI_API_KEY를 확인하세요.")
-
+        """이미지에서 텍스트만 추출 (분석용, 빠름)."""
         image = bytes_to_cv2(image_bytes)
         if image is None:
             raise ValueError("이미지 디코딩 실패")
-
         h, w = image.shape[:2]
 
-        # structurize=False로 텍스트만 추출 (빠름)
-        result = upstage_pipeline.process(
+        result = _ocr_pipeline.process(
             image_bytes=image_bytes,
             image_width=w,
             image_height=h,
-            structurize=False
+            structurize=False,
+            enable_llm_table_fix=False,
         )
-
-        return result.full_text if hasattr(result, 'full_text') else str(result)
+        return result.full_text if hasattr(result, "full_text") else str(result)

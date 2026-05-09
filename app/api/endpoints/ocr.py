@@ -10,6 +10,8 @@ from app.util.s3_client import S3Client
 from app.services.ocr.ocr_service import OCRService
 from app.schemas.ocr_response import ContractOCRResponse
 from app.core.dependencies import save_ocr_result
+from app.core.config import settings
+from app.services.masking.masking_service import mask_and_store
 
 
 router = APIRouter()
@@ -55,11 +57,35 @@ async def run_ocr_from_s3(
             structurize=False,
             include_overlay=include_overlay,
         )
+
+        # OCR 결과를 MongoDB에 먼저 저장 (원본 텍스트 + words)
         try:
             await save_ocr_result(request.s3_key, result)
         except Exception as e:
-            logger.warning(f"MongoDB OCR 결과 저장 실패(s3_key={request.s3_key}): {e}")
+            logger.warning(f"MongoDB OCR 결과 저장 실패(s3_key 로그 생략): {e}")
 
+        # OCR 저장 완료 후 PII 마스킹 처리 (ENABLE_MASKING 설정에 따라 실행)
+        # 마스킹 실패 시 서비스를 중단하지 않는다 — 원본 결과를 그대로 반환
+        if settings.ENABLE_MASKING:
+            try:
+                # words 좌표를 dict 형태로 변환 (이미지 인감/서명 영역 탐지용)
+                words_dicts = None
+                if result.words:
+                    words_dicts = [w.model_dump() for w in result.words]
+
+                await mask_and_store(
+                    original_text=result.full_text or result.markdown or "",
+                    original_image_bytes=image_bytes,
+                    s3_key=request.s3_key,
+                    ocr_words=words_dicts,
+                    img_width=result.image_width,
+                    img_height=result.image_height,
+                )
+            except Exception as e:
+                # 마스킹 실패는 OCR 응답을 막지 않는다
+                logger.warning(f"PII 마스킹 처리 실패 (원본 응답 반환): {type(e).__name__}")
+
+        # 기존 응답 구조를 그대로 반환 (마스킹 여부와 무관)
         return result
 
     except FileNotFoundError as e:

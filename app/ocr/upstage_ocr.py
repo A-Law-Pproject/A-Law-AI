@@ -689,6 +689,12 @@ def parse_ocr_words(
     return words
 
 
+from app.ocr.table_postprocessor import (
+    postprocess_ocr_text,
+    TableLLMReconstructor,
+)
+
+
 def parse_upstage_elements(
     elements: List[Dict],
     image_width: int,
@@ -813,7 +819,8 @@ class UpstageOCRPipeline:
         image_bytes: bytes = None,
         image_width: int = None,
         image_height: int = None,
-        structurize: bool = True
+        structurize: bool = True,
+        enable_llm_table_fix: bool = False,
     ) -> OCROverlayResponse:
         """
         전체 OCR 파이프라인 실행
@@ -856,18 +863,19 @@ class UpstageOCRPipeline:
                 response.image_width = meta.get("width", 0)
                 response.image_height = meta.get("height", 0)
 
-            # Markdown & 텍스트 추출
+            # Markdown & raw 텍스트 추출 (full_text는 후처리 후 설정)
             content = parse_result.get("content", {})
+            elements = parse_result.get("elements", [])
             if isinstance(content, dict):
                 response.markdown = content.get("markdown", "")
-                response.full_text = content.get("text", "")
+                raw_text = content.get("text", "")
             else:
-                # content가 문자열인 경우
                 response.markdown = str(content) if content else ""
-                response.full_text = str(content) if content else ""
+                raw_text = str(content) if content else ""
 
             # Document OCR API 호출 - 단어별 정확한 좌표 획득
             logger.info("2. Upstage Document OCR 시작 (단어별 좌표)")
+            ocr_words = None
             try:
                 ocr_result = self.upstage.ocr(
                     image_path=image_path,
@@ -882,12 +890,23 @@ class UpstageOCRPipeline:
                 logger.info(f"Document OCR 완료: {len(ocr_words)} words")
             except Exception as ocr_err:
                 logger.warning(f"Document OCR 실패 (Document Parse로 fallback): {ocr_err}")
-                # fallback: Document Parse elements에서 블록 추출
-                elements = parse_result.get("elements", [])
                 _, blocks, _ = parse_upstage_elements(
                     elements, response.image_width, response.image_height
                 )
                 response.blocks = blocks
+
+            # 표 텍스트 후처리 (줄바꿈 오류 보정)
+            # 전략 1→2→3 순서로 시도, enable_llm_table_fix=True 시 LLM 추가 적용
+            llm_reconstructor = None
+            if enable_llm_table_fix:
+                llm_reconstructor = TableLLMReconstructor(self.gpt.client)
+            response.full_text = postprocess_ocr_text(
+                raw_text=raw_text,
+                elements=elements or None,
+                words=ocr_words,
+                llm_reconstructor=llm_reconstructor,
+            )
+            logger.info("표 텍스트 후처리 완료")
 
             # 2. GPT 구조화
             if structurize and response.markdown:
