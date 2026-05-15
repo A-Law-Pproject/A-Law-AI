@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     ANALYSIS_QUEUE: str = "contract.analysis.queue"
     RESULT_EXCHANGE: str = "contract.analysis.result"
 
+    # Voice Analysis Settings
+    VOICE_EXCHANGE: str = "voice-analysis-ex"
+    VOICE_QUEUE: str = "voice-record-queue"
+    VOICE_ROUTING_KEY: str = "voice.record"
+    VOICE_RESULT_EXCHANGE: str = "voice.analysis.result"
+    VOICE_RESULT_QUEUE: str = "voice-result-queue"
+    VOICE_RESULT_ROUTING_KEY: str = "voice.result"
+
     # PostgreSQL Database (Spring Boot와 공유)
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432

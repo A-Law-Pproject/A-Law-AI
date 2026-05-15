@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from concurrent.futures import ThreadPoolExecutor
 from app.api.routers import api_router
 from app.services.rabbitmq_consumer import start_consumer, stop_consumer
+from app.services.voice_consumer import start_voice_consumer, stop_voice_consumer
 from loguru import logger
 
 
@@ -21,11 +22,23 @@ async def lifespan(app: FastAPI):
         logger.warning(f"RabbitMQ Consumer failed to start: {e}")
         logger.warning("The API will still work, but message queue processing is disabled")
 
+    logger.info("Starting Voice Consumer...")
+    try:
+        await start_voice_consumer()
+        logger.info("Voice Consumer started successfully")
+    except Exception as e:
+        logger.warning(f"Voice Consumer failed to start: {e}")
+        logger.warning("Voice analysis will be unavailable")
+
     yield
 
     logger.info("Stopping RabbitMQ Consumer...")
     await stop_consumer()
     logger.info("RabbitMQ Consumer stopped")
+
+    logger.info("Stopping Voice Consumer...")
+    await stop_voice_consumer()
+    logger.info("Voice Consumer stopped")
 
 
 app = FastAPI(
