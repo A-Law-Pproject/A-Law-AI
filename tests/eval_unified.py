@@ -41,6 +41,7 @@ load_dotenv(ROOT / ".env")
 os.environ.setdefault("LANGCHAIN_PROJECT", "A-LAW-eval")
 
 RETRIEVAL_DATASET = ROOT / "tests" / "평가데이터셋" / "eval_dataset_ver2.json"
+V3_DATASET        = ROOT / "tests" / "평가데이터셋" / "eval_dataset_v3_with_gt.json"
 RESULTS_DIR = ROOT / "results"
 DEFAULT_COLLECTIONS = [
     "law_database", "law_statutes", "contracts",
@@ -117,10 +118,32 @@ PRESETS: dict[str, RAGConfig] = {
 # 2. 데이터 로딩
 # ══════════════════════════════════════════════════════════════════════════
 
-def load_retrieval_cases(path: Path, sample: int = 0) -> list[dict]:
+def load_retrieval_cases(path: Path, sample: int = 0, difficulty: str = "") -> list[dict]:
+    """v2/v3 데이터셋 모두 지원.
+
+    v3 데이터셋 사용 시 gt_chunks 필드를 포함한다.
+    """
+    import hashlib as _hashlib
+
     data = json.loads(path.read_text(encoding="utf-8"))
     items = data.get("questions", data if isinstance(data, list) else [])
     cases = [q for q in items if q.get("question") and q.get("expected_keywords")]
+
+    if difficulty:
+        cases = [
+            q for q in cases
+            if q.get("difficulty") == difficulty
+            or (difficulty == "colloquial" and q.get("is_colloquial"))
+            or (difficulty == "trap" and q.get("is_trap"))
+        ]
+
+    # v3: gt_chunk_ids set 생성
+    for q in cases:
+        if "gt_chunks" in q and "gt_chunk_ids" not in q:
+            q["gt_chunk_ids"] = {
+                c["chunk_id"] for c in q["gt_chunks"] if c.get("chunk_id")
+            }
+
     return cases[:sample] if sample > 0 else cases
 
 
@@ -180,9 +203,58 @@ def compute_retrieval_metrics(rows: list[dict]) -> dict:
     }
 
 
+def compute_chunk_gt_metrics(rows: list[dict]) -> dict:
+    """v3 데이터셋 chunk_id 기반 정확 매칭 HR@K 및 MRR 계산.
+
+    rows 각 항목에 'gt_chunk_ids' set[str]와 'docs' list 필요.
+    """
+    import hashlib as _hashlib
+
+    def _cid(text: str) -> str:
+        return _hashlib.sha256(text[:50].encode("utf-8")).hexdigest()[:12]
+
+    k_values = [1, 3, 5]
+    hits: dict[int, int] = {k: 0 for k in k_values}
+    reciprocal_ranks: list[float] = []
+    no_gt = 0
+
+    for r in rows:
+        gt_ids = r.get("gt_chunk_ids", set())
+        if not gt_ids:
+            no_gt += 1
+            reciprocal_ranks.append(0.0)
+            continue
+
+        retrieved_ids: list[str] = []
+        for doc in r.get("docs", []):
+            if hasattr(doc, "page_content"):
+                retrieved_ids.append(_cid(doc.page_content))
+            elif isinstance(doc, str):
+                retrieved_ids.append(_cid(doc))
+
+        rr = 0.0
+        for rank, cid in enumerate(retrieved_ids, 1):
+            if cid in gt_ids:
+                rr = 1.0 / rank
+                break
+        reciprocal_ranks.append(rr)
+
+        for k in k_values:
+            if any(cid in gt_ids for cid in retrieved_ids[:k]):
+                hits[k] += 1
+
+    n = len(rows)
+    result: dict[str, Any] = {f"chunk_hr@{k}": round(hits[k] / n, 4) for k in k_values}
+    result["chunk_mrr"] = round(sum(reciprocal_ranks) / n, 4)
+    if no_gt:
+        result["_no_gt_count"] = no_gt
+    return result
+
+
 def _row_to_case_summary(r: dict) -> dict:
     return {
         "question":     r["question"],
+        "difficulty":   r.get("difficulty", ""),
         "hit_at_3":     any(_is_relevant(d, r["keywords"]) for d in r["docs"][:3]),
         "hit_at_5":     any(_is_relevant(d, r["keywords"]) for d in r["docs"][:5]),
         "answer_snippet": r.get("answer", "")[:120],
@@ -337,8 +409,10 @@ def run_mock(cases: list[dict], cfg: RAGConfig, ragas_enabled: bool) -> dict:
         answer = f"[mock] {case['question'][:40]}에 대한 답변입니다."
         rows.append({
             "question":    case["question"],
+            "difficulty":  case.get("difficulty", ""),
             "docs":        docs,
             "keywords":    kws,
+            "gt_chunk_ids": case.get("gt_chunk_ids", set()),
             "retrieval_ms": ret_ms,
             "llm_ms":      llm_ms,
             "total_ms":    ret_ms + llm_ms,
@@ -354,6 +428,11 @@ def run_mock(cases: list[dict], cfg: RAGConfig, ragas_enabled: bool) -> dict:
             })
 
     metrics = compute_retrieval_metrics(rows)
+
+    # v3: chunk GT 기반 정확 매칭 지표 추가
+    if any(r.get("gt_chunk_ids") for r in rows):
+        chunk_metrics = compute_chunk_gt_metrics(rows)
+        metrics.update(chunk_metrics)
 
     if ragas_enabled and ragas_rows:
         ragas_metrics = run_ragas_eval(ragas_rows, use_llm_metrics=False)
@@ -440,8 +519,10 @@ async def run_real(cases: list[dict], cfg: RAGConfig, ragas_enabled: bool) -> di
 
         rows.append({
             "question":    case["question"],
+            "difficulty":  case.get("difficulty", ""),
             "docs":        all_docs,
             "keywords":    kws,
+            "gt_chunk_ids": case.get("gt_chunk_ids", set()),
             "retrieval_ms": retrieval_ms,
             "llm_ms":      llm_ms,
             "total_ms":    total_ms,
@@ -458,6 +539,12 @@ async def run_real(cases: list[dict], cfg: RAGConfig, ragas_enabled: bool) -> di
             })
 
     metrics = compute_retrieval_metrics(rows)
+
+    # v3: chunk GT 기반 정확 매칭 지표 추가
+    if any(r.get("gt_chunk_ids") for r in rows):
+        chunk_metrics = compute_chunk_gt_metrics(rows)
+        metrics.update(chunk_metrics)
+
     if ragas_enabled and ragas_rows:
         metrics.update(run_ragas_eval(ragas_rows, use_llm_metrics=True))
 
@@ -489,13 +576,17 @@ def list_result_files() -> list[Path]:
 
 async def cli_main() -> None:
     parser = argparse.ArgumentParser(description="통합 RAG 하이퍼파라미터 평가")
-    parser.add_argument("--run",     action="store_true", help="평가 실행")
-    parser.add_argument("--configs", default="",
+    parser.add_argument("--run",        action="store_true", help="평가 실행")
+    parser.add_argument("--configs",    default="",
                         help="comma-separated config 이름 (기본: 전체)")
-    parser.add_argument("--sample",  type=int, default=20, help="케이스 수")
-    parser.add_argument("--mock",    action="store_true", help="mock 모드")
-    parser.add_argument("--ragas",   action="store_true",
+    parser.add_argument("--sample",     type=int, default=20, help="케이스 수")
+    parser.add_argument("--mock",       action="store_true", help="mock 모드")
+    parser.add_argument("--ragas",      action="store_true",
                         help="RAGAS + 환각 탐지 포함 (LLM 필요)")
+    parser.add_argument("--dataset-v3", action="store_true", dest="dataset_v3",
+                        help="eval_dataset_v3_with_gt.json 사용 (chunk GT 기반 지표)")
+    parser.add_argument("--difficulty", default="",
+                        help="난이도 필터: easy/medium/hard/colloquial (--dataset-v3 와 함께)")
     args = parser.parse_args()
 
     if not args.run:
@@ -507,11 +598,16 @@ async def cli_main() -> None:
         if args.configs else PRESETS
     )
 
-    if not RETRIEVAL_DATASET.exists():
-        print(f"[ERROR] 데이터셋 없음: {RETRIEVAL_DATASET}")
+    use_v3 = getattr(args, "dataset_v3", False)
+    dataset_path = V3_DATASET if use_v3 else RETRIEVAL_DATASET
+
+    if not dataset_path.exists():
+        print(f"[ERROR] 데이터셋 없음: {dataset_path}")
+        if use_v3:
+            print("먼저 python tests/build_gt_dataset.py 를 실행하세요.")
         return
 
-    cases = load_retrieval_cases(RETRIEVAL_DATASET, args.sample)
+    cases = load_retrieval_cases(dataset_path, args.sample, getattr(args, "difficulty", ""))
     print(f"\n{'='*64}")
     print(f"  통합 RAG 평가  |  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"  Configs : {list(selected.keys())}")
@@ -732,6 +828,37 @@ def run_dashboard() -> None:
                         base = gm("baseline", m) or 0.0
                         curr = gm(cfg, m) or 0.0
                         st.metric(METRIC_LABELS[m], f"{curr:.3f}", f"{curr-base:+.3f}")
+
+        # 난이도별 HR@3 (v3 데이터셋 사용 시)
+        all_cases_by_cfg = {c: results[c].get("cases", []) for c in sel_cfgs}
+        has_difficulty = any(
+            case.get("difficulty")
+            for cases_list in all_cases_by_cfg.values()
+            for case in cases_list
+        )
+        if has_difficulty:
+            st.subheader("난이도별 Hit@3")
+            difficulties = ["easy", "medium", "hard", "colloquial", "trap"]
+            diff_rows = []
+            for cfg in sel_cfgs:
+                c_list = all_cases_by_cfg[cfg]
+                for diff in difficulties:
+                    diff_cases = [c for c in c_list if c.get("difficulty") == diff]
+                    if diff_cases:
+                        hr3 = mean(1.0 if c.get("hit_at_3") else 0.0 for c in diff_cases)
+                        diff_rows.append({"Config": cfg, "난이도": diff, "HR@3": round(hr3, 4), "N": len(diff_cases)})
+            if diff_rows:
+                df_diff = pd.DataFrame(diff_rows)
+                fig_diff = px.bar(
+                    df_diff, x="난이도", y="HR@3", color="Config",
+                    barmode="group", range_y=[0, 1.1],
+                    text="HR@3",
+                    color_discrete_sequence=COLORS,
+                    title="난이도별 Hit Rate@3",
+                )
+                fig_diff.update_traces(texttemplate="%{text:.3f}", textposition="outside")
+                fig_diff.update_layout(height=380)
+                st.plotly_chart(fig_diff, use_container_width=True)
 
         # 질문별 Hit@3 히트맵
         st.subheader("질문별 Hit@3 히트맵")

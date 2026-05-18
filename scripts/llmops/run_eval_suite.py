@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-avg-total-ms", type=float, default=12000.0)
     parser.add_argument("--min-faq-hr3", type=float, default=0.70)
     parser.add_argument("--min-faithfulness", type=float, default=0.75)
+    parser.add_argument("--min-chunk-hr3", type=float, default=0.65,
+                        help="chunk_hr@3 최소값 (--dataset-v3 사용 시 적용)")
+    parser.add_argument("--dataset-v3", action="store_true", dest="dataset_v3",
+                        help="eval_dataset_v3_with_gt.json 사용 (chunk GT 기반 지표)")
+    parser.add_argument("--use-failure-analyzer", action="store_true", dest="use_failure_analyzer",
+                        help="평가 완료 후 eval_failure_analyzer.py 실행")
     return parser.parse_args()
 
 
@@ -144,12 +150,15 @@ def summarize_ragas(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     overall = payload.get("overall_ragas", {})
     hr_metrics = payload.get("hr_k_mrr", {})
+    chunk_hr_metrics = payload.get("chunk_hr_k_mrr", {})
     failures = payload.get("failure_counts", {})
     return {
         "path": str(path),
         "mode": payload.get("mode"),
+        "dataset_v3": payload.get("dataset_v3", False),
         "overall_ragas": overall,
         "faq_hr_k_mrr": hr_metrics,
+        "chunk_hr_k_mrr": chunk_hr_metrics,
         "failure_counts": failures,
         "chatbot_count": payload.get("chatbot_count", 0),
         "faq_count": payload.get("faq_count", 0),
@@ -212,6 +221,15 @@ def build_gate(args: argparse.Namespace, unified: dict[str, Any], ragas: dict[st
                 faithfulness,
                 f">= {args.min_faithfulness}",
             )
+        # v3 데이터셋 사용 시 chunk_hr@3 gate 추가
+        chunk_hr3 = _safe_float(ragas.get("chunk_hr_k_mrr", {}).get("chunk_hr@3"))
+        if ragas.get("dataset_v3") and chunk_hr3 is not None:
+            add_check(
+                "ragas.chunk_hr@3",
+                chunk_hr3 >= args.min_chunk_hr3,
+                chunk_hr3,
+                f">= {args.min_chunk_hr3}",
+            )
 
     failed = [check["name"] for check in checks if not check["passed"]]
     return {
@@ -254,6 +272,11 @@ def log_to_mlflow(
             numeric = _safe_float(value)
             if numeric is not None:
                 metrics[f"faq_{key.replace('@', '_at_')}"] = numeric
+        for key, value in ragas.get("chunk_hr_k_mrr", {}).items():
+            if not key.startswith("_"):
+                numeric = _safe_float(value)
+                if numeric is not None:
+                    metrics[f"chunk_{key.replace('@', '_at_')}"] = numeric
 
     with mlflow.start_run(run_name=f"eval-suite-{datetime.now().strftime('%Y%m%d-%H%M%S')}") as run:
         mlflow.log_params(
@@ -286,6 +309,8 @@ def main() -> int:
     started_at = time.time()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    use_v3 = getattr(args, "dataset_v3", False)
+
     unified_cmd = [
         sys.executable,
         "tests/eval_unified.py",
@@ -297,6 +322,8 @@ def main() -> int:
     ]
     if args.mock:
         unified_cmd.append("--mock")
+    if use_v3:
+        unified_cmd.append("--dataset-v3")
 
     run_command(unified_cmd)
     unified_path = find_latest("unified_eval_*.json", started_at)
@@ -305,6 +332,7 @@ def main() -> int:
     unified_summary = summarize_unified(unified_path)
 
     ragas_summary: dict[str, Any] | None = None
+    ragas_path: Path | None = None
     if not args.skip_ragas:
         ragas_cmd = [
             sys.executable,
@@ -315,6 +343,8 @@ def main() -> int:
         if args.mock:
             ragas_cmd.append("--mock")
         ragas_cmd.append("--langsmith" if args.langsmith else "--no-langsmith")
+        if use_v3:
+            ragas_cmd.append("--dataset-v3")
         run_command(ragas_cmd)
         ragas_path = find_latest("ragas_qna_eval_*.json", started_at)
         if ragas_path is None:
@@ -323,10 +353,30 @@ def main() -> int:
 
     gate = build_gate(args, unified_summary, ragas_summary)
 
+    # --use-failure-analyzer: 실패 분석 실행
+    failure_analysis_path: Path | None = None
+    if getattr(args, "use_failure_analyzer", False) and ragas_path and ragas_path.exists():
+        v3_path = ROOT / "tests" / "평가데이터셋" / "eval_dataset_v3_with_gt.json"
+        if v3_path.exists():
+            failure_cmd = [
+                sys.executable,
+                "tests/eval_failure_analyzer.py",
+                "--eval-result", str(ragas_path),
+                "--dataset", str(v3_path),
+            ]
+            try:
+                run_command(failure_cmd)
+                failure_analysis_path = find_latest("failure_analysis_*.json", started_at)
+            except subprocess.CalledProcessError as e:
+                print(f"[WARN] 실패 분석 실행 오류: {e}")
+        else:
+            print("[WARN] --use-failure-analyzer: v3 데이터셋 없음, 건너뜀")
+
     payload = normalize_json(
         {
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "mode": "mock" if args.mock else "real",
+            "dataset_v3": use_v3,
             "commands": {
                 "eval_unified": unified_cmd,
                 "eval_ragas_qna": None if args.skip_ragas else ragas_cmd,
@@ -334,6 +384,7 @@ def main() -> int:
             "unified": unified_summary,
             "ragas": ragas_summary,
             "gate": gate,
+            "failure_analysis": str(failure_analysis_path) if failure_analysis_path else None,
         }
     )
 

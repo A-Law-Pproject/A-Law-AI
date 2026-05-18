@@ -65,6 +65,7 @@ os.environ.setdefault("LANGCHAIN_PROJECT", "A-LAW-eval")
 CHATBOT_XLSX  = ROOT / "tests" / "평가데이터셋" / "챗봇_평가용_최종자료.xlsx"
 LEASE_FAQ_JSONL = ROOT / "tests" / "평가데이터셋" / "lease_faq.jsonl"
 QNA_XLSX      = ROOT / "tests" / "평가데이터셋" / "국가_제공_QnA_자료.xlsx"
+V3_DATASET    = ROOT / "tests" / "평가데이터셋" / "eval_dataset_v3_with_gt.json"
 RESULTS_DIR   = ROOT / "results"
 
 DEFAULT_COLLECTIONS = [
@@ -147,6 +148,47 @@ def load_lease_faq(path: Path, sample: int) -> list[dict[str, Any]]:
             "gt_laws":    gt_laws,
             "gt_clauses": gt_clauses,
         })
+    return cases[:sample] if sample > 0 else cases
+
+
+def load_v3_dataset(path: Path, sample: int, difficulty: str = "") -> list[dict[str, Any]]:
+    """eval_dataset_v3_with_gt.json 로드.
+
+    반환 형식: 기존 case dict에 'gt_chunk_ids' set[str] 추가.
+    difficulty 필터: "easy" / "medium" / "hard" / "colloquial" / "trap"
+    """
+    import hashlib as _hashlib
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    questions = raw.get("questions", [])
+
+    if difficulty:
+        questions = [
+            q for q in questions
+            if q.get("difficulty") == difficulty
+            or (difficulty == "colloquial" and q.get("is_colloquial"))
+            or (difficulty == "trap" and q.get("is_trap"))
+        ]
+
+    cases: list[dict] = []
+    for q in questions:
+        gt_chunk_ids: set[str] = set()
+        for chunk in q.get("gt_chunks", []):
+            cid = chunk.get("chunk_id")
+            if cid:
+                gt_chunk_ids.add(cid)
+        cases.append({
+            "id":               q.get("id", ""),
+            "question":         q["question"],
+            "answer":           q.get("expected_answer", ""),
+            "difficulty":       q.get("difficulty", ""),
+            "expected_keywords": q.get("expected_keywords", []),
+            "relevant_law":     q.get("relevant_law", []),
+            "gt_chunks":        q.get("gt_chunks", []),
+            "gt_chunk_ids":     gt_chunk_ids,
+            "gt_coverage":      q.get("gt_coverage", "none"),
+        })
+
     return cases[:sample] if sample > 0 else cases
 
 
@@ -374,6 +416,64 @@ async def _real_answer(question: str, contexts: list[str], llm: Any) -> str:
 # HR@K / MRR (lease_faq 전용)
 # ──────────────────────────────────────────────
 
+def compute_chunk_hr_k_mrr(
+    cases: list[dict],
+    docs_per_case: list[list[Any]],
+    k_values: list[int] | None = None,
+) -> dict[str, float]:
+    """v3 데이터셋 chunk_id 기반 정확 매칭 HR@K 및 MRR 계산.
+
+    cases 각 항목에 'gt_chunk_ids' set[str] 필드가 있어야 한다.
+    docs_per_case: 검색된 Document 목록 (page_content 기준 chunk_id 계산).
+    """
+    import hashlib as _hashlib
+
+    def _cid(text: str) -> str:
+        return _hashlib.sha256(text[:50].encode("utf-8")).hexdigest()[:12]
+
+    if k_values is None:
+        k_values = [1, 3, 5]
+    if not cases:
+        return {}
+
+    hits: dict[int, int] = {k: 0 for k in k_values}
+    reciprocal_ranks: list[float] = []
+    no_gt_count = 0
+
+    for case, docs in zip(cases, docs_per_case):
+        gt_ids = case.get("gt_chunk_ids", set())
+        if not gt_ids:
+            no_gt_count += 1
+            reciprocal_ranks.append(0.0)
+            continue
+
+        # docs가 Document 객체인 경우와 문자열인 경우 모두 처리
+        retrieved_ids: list[str] = []
+        for doc in docs:
+            if hasattr(doc, "page_content"):
+                retrieved_ids.append(_cid(doc.page_content))
+            elif isinstance(doc, str):
+                retrieved_ids.append(_cid(doc))
+
+        rr = 0.0
+        for rank, cid in enumerate(retrieved_ids, 1):
+            if cid in gt_ids:
+                rr = 1.0 / rank
+                break
+        reciprocal_ranks.append(rr)
+
+        for k in k_values:
+            if any(cid in gt_ids for cid in retrieved_ids[:k]):
+                hits[k] += 1
+
+    n = len(cases)
+    result: dict[str, float] = {f"chunk_hr@{k}": round(hits[k] / n, 4) for k in k_values}
+    result["chunk_mrr"] = round(sum(reciprocal_ranks) / n, 4)
+    if no_gt_count:
+        result["_no_gt_count"] = no_gt_count
+    return result
+
+
 def compute_hr_k_mrr(
     cases: list[dict],
     docs_per_case: list[list[str]],
@@ -431,6 +531,51 @@ def _build_ragas_dataset(rows: list[dict[str, Any]]) -> Any:
             user_input=row["question"],
             retrieved_contexts=contexts,
             reference_contexts=[reference],
+            reference=reference,
+            response=response,
+        ))
+    return EvaluationDataset(samples=samples)
+
+
+def _build_ragas_dataset_v3(rows: list[dict[str, Any]]) -> Any:
+    """v3 데이터셋 전용 RAGAS 데이터셋 빌드.
+
+    expected_answer를 reference로, gt_chunks의 실제 텍스트를 reference_contexts로 사용.
+    GT chunk 텍스트가 있으면 context_recall 정확도가 향상된다.
+    """
+    from ragas import EvaluationDataset
+    from ragas.dataset_schema import SingleTurnSample
+
+    samples = []
+    for row in rows:
+        reference = str(row.get("answer") or row.get("expected_answer") or "").strip()
+        if not reference:
+            continue
+
+        # 검색 결과 컨텍스트
+        contexts = [c for c in row.get("retrieved_contexts", []) if str(c).strip()]
+        if not contexts:
+            contexts = ["(검색 결과 없음)"]
+
+        # GT chunk 텍스트를 reference_contexts로 사용 (없으면 reference 텍스트로 폴백)
+        gt_chunks = row.get("gt_chunks", [])
+        if gt_chunks:
+            ref_contexts = [
+                c.get("page_content_full") or c.get("page_content_preview") or reference
+                for c in gt_chunks
+                if c.get("page_content_full") or c.get("page_content_preview")
+            ]
+        else:
+            ref_contexts = [reference]
+
+        if not ref_contexts:
+            ref_contexts = [reference]
+
+        response = str(row.get("response") or "").strip() or None
+        samples.append(SingleTurnSample(
+            user_input=row["question"],
+            retrieved_contexts=contexts,
+            reference_contexts=ref_contexts,
             reference=reference,
             response=response,
         ))
@@ -874,7 +1019,16 @@ def log_eval_to_langsmith(
 async def run(args: argparse.Namespace) -> None:
     # ── 데이터 로딩 ───────────────────────────────────────────────
     source_label: str
-    if args.source == "qna":
+    use_v3 = getattr(args, "dataset_v3", False)
+
+    if use_v3:
+        if not V3_DATASET.exists():
+            print(f"[오류] v3 데이터셋 없음: {V3_DATASET}")
+            print("먼저 python tests/build_gt_dataset.py 를 실행하세요.")
+            return
+        cases = load_v3_dataset(V3_DATASET, args.sample, getattr(args, "difficulty", ""))
+        source_label = "eval_dataset_v3 (chunk GT)"
+    elif args.source == "qna":
         cases = load_qna_legacy(QNA_XLSX, args.sample)
         source_label = "국가 제공 QnA"
     else:
@@ -882,7 +1036,8 @@ async def run(args: argparse.Namespace) -> None:
         source_label = "챗봇 평가용 최종자료"
 
     faq_cases = load_lease_faq(LEASE_FAQ_JSONL, 0)
-    print(f"[Data] 챗봇 평가: {len(cases)}개 | lease_faq HR@K: {len(faq_cases)}개")
+    print(f"[Data] 평가: {len(cases)}개 | lease_faq HR@K: {len(faq_cases)}개"
+          + (f" | v3 chunk GT" if use_v3 else ""))
 
     collections = [c.strip() for c in args.collections.split(",") if c.strip()]
     db = embeddings = reranker = llm = None
@@ -971,7 +1126,7 @@ async def run(args: argparse.Namespace) -> None:
                 failure_counts["legal_fit"] += 1
                 legal_fit_reason = f"judge_error: {e}"
 
-        rows.append({
+        row_entry: dict[str, Any] = {
             "분류":               case.get("분류", "기타"),
             "세부유형":           case.get("세부유형", "-"),
             "question":          case["question"],
@@ -983,7 +1138,14 @@ async def run(args: argparse.Namespace) -> None:
             "legal_fit":         legal_fit,
             "legal_fit_reason":  legal_fit_reason,
             "error":             error_message,
-        })
+        }
+        # v3 모드: GT chunk 정보 포함 (failure_analyzer 및 chunk HR@K에 사용)
+        if use_v3:
+            row_entry["gt_chunks"]    = case.get("gt_chunks", [])
+            row_entry["gt_chunk_ids"] = case.get("gt_chunk_ids", set())
+            row_entry["difficulty"]   = case.get("difficulty", "")
+            row_entry["id"]           = case.get("id", "")
+        rows.append(row_entry)
 
     # ── lease_faq HR@K 검색 ────────────────────────────────────────
     print(f"\n[HR@K] lease_faq {len(faq_cases)}개 검색 중...")
@@ -1024,10 +1186,19 @@ async def run(args: argparse.Namespace) -> None:
     hr_k_results = compute_hr_k_mrr(faq_cases, faq_docs_per_case)
     print(f"[HR@K] 결과: {hr_k_results}")
 
+    # ── v3 chunk HR@K 계산 (추가) ─────────────────────────────────
+    chunk_hr_k_results: dict[str, float] = {}
+    if use_v3 and rows:
+        print("\n[Chunk HR@K] v3 chunk_id 정확 매칭 지표 계산 중...")
+        # retrieved_contexts (텍스트)를 Document 대신 직접 전달
+        v3_docs_per_case = [r.get("retrieved_contexts", []) for r in rows]
+        chunk_hr_k_results = compute_chunk_hr_k_mrr(rows, v3_docs_per_case)
+        print(f"[Chunk HR@K] {chunk_hr_k_results}")
+
     # ── RAGAS 평가 ─────────────────────────────────────────────────
     print("\n[RAGAS] 지표 계산 중...")
     try:
-        dataset = _build_ragas_dataset(rows)
+        dataset = _build_ragas_dataset_v3(rows) if use_v3 else _build_ragas_dataset(rows)
         scores_df = _run_ragas(dataset, use_llm=args.llm, has_response=args.answer)
     except Exception as e:
         failure_counts["ragas"] += 1
@@ -1069,16 +1240,18 @@ async def run(args: argparse.Namespace) -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     payload = {
-        "created_at":     datetime.now().isoformat(timespec="seconds"),
-        "source":         source_label,
-        "mode":           "mock" if args.mock else "real",
-        "llm_judge":      args.llm,
-        "answer_eval":    args.answer,
-        "chatbot_count":  len(rows),
-        "faq_count":      len(faq_cases),
-        "overall_ragas":  overall,
-        "hr_k_mrr":       hr_k_results,
-        "failure_counts": failure_counts,
+        "created_at":        datetime.now().isoformat(timespec="seconds"),
+        "source":            source_label,
+        "mode":              "mock" if args.mock else "real",
+        "llm_judge":         args.llm,
+        "answer_eval":       args.answer,
+        "dataset_v3":        use_v3,
+        "chatbot_count":     len(rows),
+        "faq_count":         len(faq_cases),
+        "overall_ragas":     overall,
+        "hr_k_mrr":          hr_k_results,
+        "chunk_hr_k_mrr":    chunk_hr_k_results,
+        "failure_counts":    failure_counts,
         "cases": [
             {
                 "분류":     r["분류"],
@@ -1158,6 +1331,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sample", type=int, default=0,  help="챗봇 데이터 처음 N개 (0=전체)")
     p.add_argument("--collections", default=",".join(DEFAULT_COLLECTIONS))
     p.add_argument("--k-per-collection", type=int, default=3)
+    p.add_argument("--dataset-v3",  action="store_true", dest="dataset_v3",
+                   help="eval_dataset_v3_with_gt.json 사용 (chunk GT 기반 정확 매칭 HR@K)")
+    p.add_argument("--difficulty",   default="",
+                   help="난이도 필터: easy/medium/hard/colloquial/trap (--dataset-v3 와 함께)")
     p.add_argument("--rerank",           action="store_true")
     p.add_argument("--rerank-top-n",     type=int, default=5)
     p.add_argument("--multiquery",       action="store_true",

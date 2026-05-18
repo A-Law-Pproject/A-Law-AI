@@ -9,6 +9,7 @@ from typing import Optional
 import aio_pika
 from aio_pika import ExchangeType, Message
 from loguru import logger
+from pydantic import ValidationError
 
 from app.core.config import settings
 from app.schemas.voice_contract_fact_check import (
@@ -31,6 +32,7 @@ class VoiceContractFactCheckConsumer:
         self.connection: Optional[aio_pika.RobustConnection] = None
         self.channel: Optional[aio_pika.Channel] = None
         self.result_exchange: Optional[aio_pika.Exchange] = None
+        self.dead_letter_exchange: Optional[aio_pika.Exchange] = None
         self._running = False
         self._consume_task: Optional[asyncio.Task] = None
 
@@ -45,6 +47,7 @@ class VoiceContractFactCheckConsumer:
         self.connection = None
         self.channel = None
         self.result_exchange = None
+        self.dead_letter_exchange = None
 
         self.connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
         self.channel = await self.connection.channel()
@@ -67,8 +70,8 @@ class VoiceContractFactCheckConsumer:
 
         logger.info("[VoiceContractFactCheckConsumer] RabbitMQ connected")
 
-    async def setup_topology(self):
-        """Declare the voice analysis queue topology."""
+    async def _declare_voice_topology(self) -> aio_pika.Queue:
+        """Declare the existing main queue shape plus a separate DLQ topology."""
         if self.channel is None:
             raise RuntimeError("RabbitMQ channel not initialized")
 
@@ -77,6 +80,8 @@ class VoiceContractFactCheckConsumer:
             ExchangeType.DIRECT,
             durable=True,
         )
+
+        # Keep the main queue compatible with the already-existing broker shape.
         voice_queue = await self.channel.declare_queue(
             settings.VOICE_ANALYSIS_QUEUE,
             durable=True,
@@ -85,6 +90,25 @@ class VoiceContractFactCheckConsumer:
             voice_exchange,
             routing_key=settings.VOICE_ANALYSIS_ROUTING_KEY,
         )
+
+        self.dead_letter_exchange = await self.channel.declare_exchange(
+            settings.VOICE_ANALYSIS_EXCHANGE + ".dlx",
+            ExchangeType.DIRECT,
+            durable=True,
+        )
+        voice_dlq = await self.channel.declare_queue(
+            settings.VOICE_ANALYSIS_QUEUE + ".dlq",
+            durable=True,
+        )
+        await voice_dlq.bind(
+            self.dead_letter_exchange,
+            routing_key=settings.VOICE_ANALYSIS_ROUTING_KEY + ".failed",
+        )
+        return voice_queue
+
+    async def setup_topology(self):
+        """Declare the voice analysis queue topology."""
+        voice_queue = await self._declare_voice_topology()
         logger.info(
             "[VoiceContractFactCheckConsumer] Topology ready: "
             f"queue={settings.VOICE_ANALYSIS_QUEUE}"
@@ -112,20 +136,7 @@ class VoiceContractFactCheckConsumer:
         while self._running:
             try:
                 await self.connect()
-
-                voice_exchange = await self.channel.declare_exchange(
-                    settings.VOICE_ANALYSIS_EXCHANGE,
-                    ExchangeType.DIRECT,
-                    durable=True,
-                )
-                voice_queue = await self.channel.declare_queue(
-                    settings.VOICE_ANALYSIS_QUEUE,
-                    durable=True,
-                )
-                await voice_queue.bind(
-                    voice_exchange,
-                    routing_key=settings.VOICE_ANALYSIS_ROUTING_KEY,
-                )
+                voice_queue = await self._declare_voice_topology()
 
                 retry_delay = 5
                 logger.info(
@@ -137,18 +148,17 @@ class VoiceContractFactCheckConsumer:
                     async for message in queue_iter:
                         if not self._running:
                             return
-                        async with message.process():
-                            await self._handle_message(message)
+                        await self._handle_message(message)
 
             except asyncio.CancelledError:
                 logger.info("[VoiceContractFactCheckConsumer] Consuming cancelled")
                 return
-            except Exception as e:
+            except Exception as exc:
                 if not self._running:
                     return
                 logger.error(
                     "[VoiceContractFactCheckConsumer] Connection lost, "
-                    f"retrying in {retry_delay}s: {e}"
+                    f"retrying in {retry_delay}s: {exc}"
                 )
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 60)
@@ -161,15 +171,40 @@ class VoiceContractFactCheckConsumer:
 
         try:
             body = json.loads(message.body.decode())
-            job_id = body.get("jobId", "unknown")
-            voice_record_id = body.get("voiceRecordId", 0)
-            contract_id = body.get("contractId", 0)
+            job_id = body.get("jobId") or body.get("job_id") or "unknown"
+            voice_record_id = body.get("voiceRecordId") or body.get("voice_record_id") or 0
+            contract_id = body.get("contractId") or body.get("contract_id") or 0
             logger.info(
                 "[VoiceContractFactCheckConsumer] Received: "
                 f"voiceRecordId={voice_record_id}, jobId={job_id}"
             )
+        except json.JSONDecodeError as exc:
+            logger.error(f"[VoiceContractFactCheckConsumer] JSON parse error: {exc}")
+            await self._publish_terminal_error(
+                message,
+                voice_record_id,
+                contract_id,
+                job_id,
+                f"JSON parse error: {exc}",
+                start_ms,
+            )
+            return
 
+        try:
             request = VoiceContractFactCheckRequest(**body)
+        except ValidationError as exc:
+            logger.error(f"[VoiceContractFactCheckConsumer] Payload validation error: {exc}")
+            await self._publish_terminal_error(
+                message,
+                voice_record_id,
+                contract_id,
+                job_id,
+                f"ValidationError: {exc}",
+                start_ms,
+            )
+            return
+
+        try:
             result = await self._process(request, start_ms)
             await self._publish_result(result)
             await save_voice_fact_check_result({
@@ -181,20 +216,104 @@ class VoiceContractFactCheckConsumer:
                 "factCheckItems": [item.model_dump(mode="json") for item in (result.factCheckItems or [])],
                 "processingTimeMs": result.processingTimeMs,
             })
+            await message.ack()
             logger.info(
                 "[VoiceContractFactCheckConsumer] Completed: "
                 f"voiceRecordId={voice_record_id}, jobId={job_id}"
             )
-
-        except json.JSONDecodeError as e:
-            logger.error(f"[VoiceContractFactCheckConsumer] JSON parse error: {e}")
-            await self._publish_error(voice_record_id, contract_id, job_id, f"JSON parse error: {e}", start_ms)
-        except Exception as e:
+        except Exception as exc:
             logger.exception(
                 "[VoiceContractFactCheckConsumer] Processing error: "
-                f"{type(e).__name__}: {e}"
+                f"{type(exc).__name__}: {exc}"
             )
-            await self._publish_error(voice_record_id, contract_id, job_id, f"{type(e).__name__}: {e}", start_ms)
+            await self._publish_retryable_failure(
+                message,
+                voice_record_id=voice_record_id,
+                contract_id=contract_id,
+                job_id=job_id,
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+    async def _publish_terminal_error(
+        self,
+        message: aio_pika.IncomingMessage,
+        voice_record_id: int,
+        contract_id: int,
+        job_id: str,
+        error_message: str,
+        start_ms: int,
+    ) -> None:
+        try:
+            await self._publish_error(
+                voice_record_id,
+                contract_id,
+                job_id,
+                error_message,
+                start_ms,
+            )
+            await message.ack()
+        except Exception as exc:
+            logger.error(
+                "[VoiceContractFactCheckConsumer] Failed to publish terminal error, "
+                f"sending original message to DLQ: {exc}"
+            )
+            await self._publish_retryable_failure(
+                message,
+                voice_record_id=voice_record_id,
+                contract_id=contract_id,
+                job_id=job_id,
+                error_message=error_message,
+                failure_type="terminal",
+            )
+
+    async def _publish_retryable_failure(
+        self,
+        message: aio_pika.IncomingMessage,
+        *,
+        voice_record_id: int,
+        contract_id: int,
+        job_id: str,
+        error_message: str,
+        failure_type: str = "processing",
+    ) -> None:
+        if self.dead_letter_exchange is None:
+            await self._declare_voice_topology()
+
+        headers = dict(message.headers or {})
+        headers.update(
+            {
+                "x-original-routing-key": settings.VOICE_ANALYSIS_ROUTING_KEY,
+                "x-job-id": job_id,
+                "x-contract-id": contract_id,
+                "x-voice-record-id": voice_record_id,
+                "x-failure-type": failure_type,
+                "x-error-message": error_message[:500],
+            }
+        )
+
+        try:
+            await self.dead_letter_exchange.publish(
+                Message(
+                    body=message.body,
+                    content_type=message.content_type or "application/json",
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    headers=headers,
+                    correlation_id=message.correlation_id,
+                    message_id=message.message_id,
+                ),
+                routing_key=settings.VOICE_ANALYSIS_ROUTING_KEY + ".failed",
+            )
+            await message.ack()
+            logger.warning(
+                "[VoiceContractFactCheckConsumer] Routed message to DLQ: "
+                f"voiceRecordId={voice_record_id}, contractId={contract_id}, jobId={job_id}"
+            )
+        except Exception as exc:
+            logger.error(
+                "[VoiceContractFactCheckConsumer] Failed to publish to DLQ, requeueing message: "
+                f"voiceRecordId={voice_record_id}, contractId={contract_id}, jobId={job_id}, error={exc}"
+            )
+            await message.reject(requeue=True)
 
     async def _process(
         self,
@@ -247,7 +366,14 @@ class VoiceContractFactCheckConsumer:
             f"voiceRecordId={result.voiceRecordId}, jobId={result.jobId}"
         )
 
-    async def _publish_error(self, voice_record_id: int, contract_id: int, job_id: str, error_message: str, start_ms: int):
+    async def _publish_error(
+        self,
+        voice_record_id: int,
+        contract_id: int,
+        job_id: str,
+        error_message: str,
+        start_ms: int,
+    ):
         error_result = VoiceContractFactCheckResult(
             voiceRecordId=voice_record_id,
             contractId=contract_id,
@@ -256,10 +382,7 @@ class VoiceContractFactCheckConsumer:
             processingTimeMs=int(time.time() * 1000) - start_ms,
             errorMessage=error_message,
         )
-        try:
-            await self._publish_result(error_result)
-        except Exception as e:
-            logger.error(f"[VoiceContractFactCheckConsumer] Failed to publish error result: {e}")
+        await self._publish_result(error_result)
 
     async def stop(self):
         self._running = False
