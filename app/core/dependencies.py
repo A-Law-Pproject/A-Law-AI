@@ -7,6 +7,7 @@ import certifi
 from langchain_openai import ChatOpenAI
 from loguru import logger
 from motor.motor_asyncio import AsyncIOMotorClient
+import redis.asyncio as aioredis
 
 from app.core.config import settings
 from app.rag.embedding.kure import KUREEmbeddings
@@ -16,6 +17,7 @@ _vector_db: VectorDB | None = None
 _embeddings: KUREEmbeddings | None = None
 _llm: ChatOpenAI | None = None
 _mongo_client: AsyncIOMotorClient | None = None
+_redis_client: aioredis.Redis | None = None
 
 
 def get_vector_db() -> VectorDB:
@@ -64,6 +66,17 @@ def get_mongo_client() -> AsyncIOMotorClient:
         )
         logger.info("MongoDB singleton initialized")
     return _mongo_client
+
+
+async def get_redis_client() -> aioredis.Redis:
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = aioredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+        )
+        logger.info("Redis singleton initialized")
+    return _redis_client
 
 
 def _extract_ocr_text(doc: dict | None, *, lookup: str) -> str:

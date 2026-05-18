@@ -80,7 +80,7 @@ class Settings(BaseSettings):
 
     # PII 마스킹 설정
     ENABLE_MASKING: bool = True   # 마스킹 기능 ON/OFF 토글 (.env에서 ENABLE_MASKING=false로 비활성화)
-    MASKING_VERSION: str = "1.0"  # 마스킹 엔진 버전 (MongoDB 메타데이터에 기록)
+    MASKING_VERSION: str = "1.1"  # 마스킹 엔진 버전 (MongoDB 메타데이터에 기록)
 
     # 표 텍스트 후처리 설정
     ENABLE_LLM_TABLE_FIX: bool = False  # LLM 기반 표 줄바꿈 오류 보정 (비용 발생, .env에서 활성화)

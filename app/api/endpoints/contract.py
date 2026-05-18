@@ -4,7 +4,7 @@
 from fastapi import APIRouter, HTTPException, Body
 
 from app.schemas.contract import TermRequest, TermExplanation
-from app.rag.chain.chain import explain_term_rag
+from app.rag.chain.chain import explain_term_auto
 from app.core.dependencies import get_vector_db, get_embeddings, get_llm
 
 router = APIRouter()
@@ -14,7 +14,7 @@ router = APIRouter()
     "/explain/term",
     response_model=TermExplanation,
     summary="법률 용어 해설",
-    description="법률 문서 RAG 검색을 통해 임대차 관련 법률 용어를 설명합니다.",
+    description="문장에서 핵심 법률 용어를 추출한 뒤, 쉬운 설명과 RAG 기반 해설을 자동 선택합니다.",
 )
 async def explain_term(
     request: TermRequest = Body(
@@ -35,17 +35,14 @@ async def explain_term(
         }
     )
 ):
-    db = get_vector_db()
-    emb = get_embeddings()
     llm = get_llm()
 
     try:
-        result = await explain_term_rag(
-            term=request.sentence,
-            client=db,
-            embeddings=emb,
+        result = await explain_term_auto(
+            sentence=request.sentence,
             llm=llm,
-            surrounding_text=request.sentence,
+            client_factory=get_vector_db,
+            embeddings_factory=get_embeddings,
         )
         return TermExplanation(
             easy_explanation=result.get("simple_explanation", ""),

@@ -4,6 +4,7 @@ import re
 from langchain_core.documents import Document
 
 from app.rag.embedding.kure import KUREEmbeddings
+from app.rag.retriever.law_graph import build_multi_law_filter, get_related_laws
 from app.rag.vector_store.base import VectorDB
 
 
@@ -113,8 +114,17 @@ def _merge_filter_dict(base_filter: dict | None, extra_filter: dict | None) -> d
     return {"$and": [base_filter, extra_filter]}
 
 
-def infer_law_statutes_filter(query: str) -> dict | None:
-    """질의에서 law_statutes namespace용 메타데이터 필터를 추론."""
+def infer_law_statutes_filter(query: str, expand_related: bool = True) -> dict | None:
+    """질의에서 law_statutes namespace용 메타데이터 필터를 추론.
+
+    Args:
+        query: 사용자 질의 또는 조항 텍스트.
+        expand_related: True이면 law_graph를 이용해 관련 법령도 OR 필터로 확장.
+            시행령/시행규칙 타입 필터가 적용되는 경우엔 확장하지 않는다.
+
+    Returns:
+        Pinecone 메타데이터 필터 딕셔너리 또는 None.
+    """
     normalized = re.sub(r"\s+", " ", query).strip()
     clauses: list[dict] = []
 
@@ -124,8 +134,16 @@ def infer_law_statutes_filter(query: str) -> dict | None:
             matched_law_name = law_name
             break
 
+    # 시행령/시행규칙 타입 필터 여부 확인 (관련법 확장과 함께 쓰면 노이즈 발생)
+    has_law_type_filter = "시행규칙" in normalized or "시행령" in normalized or "규칙" in normalized
+
     if matched_law_name:
-        clauses.append({"law_name": matched_law_name})
+        if expand_related and not has_law_type_filter:
+            related = get_related_laws(matched_law_name, query)
+            law_filter = build_multi_law_filter(matched_law_name, related)
+        else:
+            law_filter = {"law_name": matched_law_name}
+        clauses.append(law_filter)
 
     matched_source_dir = None
     for source_dir, keywords in _SOURCE_DIR_KEYWORDS.items():

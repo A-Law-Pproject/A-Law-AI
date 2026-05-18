@@ -1,33 +1,30 @@
 """
-OCR API 엔드포인트
-Spring Boot에서 S3 키를 받아 OCR 처리 후 텍스트 + 오버레이 반환
+OCR endpoints with pre-OCR masking support.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from app.util.s3_client import S3Client
-from app.services.ocr.ocr_service import OCRService
-from app.schemas.ocr_response import ContractOCRResponse
-from app.core.dependencies import save_ocr_result
 from app.core.config import settings
+from app.schemas.ocr_response import ContractOCRResponse
+from app.services.masking.image_masker import ImageMaskingResult, mask_image_for_ocr
 from app.services.masking.masking_service import mask_and_store
+from app.services.masking.text_masker import TextMasker
+from app.services.ocr.ocr_service import OCRService
+from app.util.s3_client import S3Client
 
 
 router = APIRouter()
 
 
-# ===========================================
-# Request 스키마
-# ===========================================
-
 class OCRRequest(BaseModel):
-    s3_key: str = Field(..., description="S3 객체 키")
+    s3_key: str = Field(..., description="S3 object key")
 
-
-# ===========================================
-# 의존성
-# ===========================================
 
 def get_s3_client() -> S3Client:
     return S3Client()
@@ -37,92 +34,136 @@ def get_ocr_service() -> OCRService:
     return OCRService()
 
 
-# ===========================================
-# API 엔드포인트
-# ===========================================
+async def save_ocr_result(s3_key: str, result: ContractOCRResponse) -> None:
+    from app.core.dependencies import save_ocr_result as _save_ocr_result
+
+    await _save_ocr_result(s3_key, result)
+
+
+def _mask_nested_strings(value: Any, masker: TextMasker) -> Any:
+    if isinstance(value, str):
+        return masker.mask_all(value).masked_text
+    if isinstance(value, dict):
+        return {key: _mask_nested_strings(item, masker) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_mask_nested_strings(item, masker) for item in value]
+    return value
+
+
+def _apply_text_masking_to_result(result: ContractOCRResponse) -> ContractOCRResponse:
+    if not settings.ENABLE_MASKING:
+        return result
+
+    masker = TextMasker()
+    if result.full_text:
+        result.full_text = masker.mask_all(result.full_text).masked_text
+    if result.markdown:
+        result.markdown = masker.mask_all(result.markdown).masked_text
+    if result.contract_data:
+        result.contract_data = _mask_nested_strings(result.contract_data, masker)
+    return result
+
+
+async def _prepare_image_for_ocr(image_bytes: bytes) -> ImageMaskingResult:
+    if not settings.ENABLE_MASKING:
+        return ImageMaskingResult(image_bytes=image_bytes)
+
+    masking_result = await asyncio.to_thread(mask_image_for_ocr, image_bytes)
+    if masking_result.masking_failed:
+        logger.error(f"Blocking OCR because pre-OCR masking failed: {masking_result.error_message}")
+        raise HTTPException(500, "사전 마스킹에 실패하여 OCR을 진행할 수 없습니다.")
+    return masking_result
+
 
 @router.post("/ocr", response_model=ContractOCRResponse, summary="[완료] S3 이미지 OCR")
 async def run_ocr_from_s3(
     request: OCRRequest,
-    include_overlay: bool = Query(True, description="오버레이(단어 좌표) 포함 여부"),
+    include_overlay: bool = Query(True, description="Include OCR word boxes in response"),
     s3_client: S3Client = Depends(get_s3_client),
     service: OCRService = Depends(get_ocr_service),
 ):
-    """S3에서 이미지를 가져와 OCR 처리. words 좌표 포함."""
     try:
-        image_bytes = s3_client.get_image(request.s3_key)
+        original_image_bytes = await asyncio.to_thread(s3_client.get_image, request.s3_key)
+        pre_mask_result = await _prepare_image_for_ocr(original_image_bytes)
 
-        result = service.process_and_map(
-            image_bytes=image_bytes,
+        ocr_include_overlay = include_overlay or settings.ENABLE_MASKING
+        result = await asyncio.to_thread(
+            service.process_and_map,
+            image_bytes=pre_mask_result.image_bytes,
             structurize=False,
-            include_overlay=include_overlay,
+            include_overlay=ocr_include_overlay,
         )
+        result = _apply_text_masking_to_result(result)
 
-        # OCR 결과를 MongoDB에 먼저 저장 (원본 텍스트 + words)
         try:
             await save_ocr_result(request.s3_key, result)
-        except Exception as e:
-            logger.warning(f"MongoDB OCR 결과 저장 실패(s3_key 로그 생략): {e}")
+        except Exception as exc:
+            logger.warning(f"Failed to save OCR result to MongoDB: {exc}")
 
-        # OCR 저장 완료 후 PII 마스킹 처리 (ENABLE_MASKING 설정에 따라 실행)
-        # 마스킹 실패 시 서비스를 중단하지 않는다 — 원본 결과를 그대로 반환
         if settings.ENABLE_MASKING:
             try:
-                # words 좌표를 dict 형태로 변환 (이미지 인감/서명 영역 탐지용)
-                words_dicts = None
-                if result.words:
-                    words_dicts = [w.model_dump() for w in result.words]
-
+                words_dicts = [word.model_dump() for word in result.words] if result.words else None
                 await mask_and_store(
                     original_text=result.full_text or result.markdown or "",
-                    original_image_bytes=image_bytes,
+                    original_image_bytes=original_image_bytes,
                     s3_key=request.s3_key,
                     ocr_words=words_dicts,
                     img_width=result.image_width,
                     img_height=result.image_height,
+                    image_bytes_for_storage=pre_mask_result.image_bytes,
+                    pre_mask_count=pre_mask_result.mask_count,
+                    pre_mask_types=pre_mask_result.mask_types,
                 )
-            except Exception as e:
-                # 마스킹 실패는 OCR 응답을 막지 않는다
-                logger.warning(f"PII 마스킹 처리 실패 (원본 응답 반환): {type(e).__name__}")
+            except Exception as exc:
+                logger.warning(f"Failed to persist masking artifacts after OCR: {type(exc).__name__}: {exc}")
 
-        # 기존 응답 구조를 그대로 반환 (마스킹 여부와 무관)
-        return result
-
-    except FileNotFoundError as e:
-        logger.error(f"S3 파일을 찾을 수 없음: {e}")
-        raise HTTPException(404, f"파일을 찾을 수 없습니다: {request.s3_key}")
-    except Exception as e:
-        logger.error(f"OCR 처리 중 오류 발생: {e}")
-        raise HTTPException(500, f"OCR 처리 실패: {str(e)}")
-
-
-@router.post("/ocr/full", response_model=ContractOCRResponse, summary="이미지 직접 업로드 OCR")
-async def run_ocr_full(
-    file: UploadFile = File(...),
-    structurize: bool = Query(True, description="구조화 여부"),
-    include_overlay: bool = Query(True, description="오버레이(단어 좌표) 포함 여부"),
-    service: OCRService = Depends(get_ocr_service),
-):
-    """이미지 파일을 직접 업로드하여 OCR 처리 (전체 결과)."""
-    try:
-        if not file.content_type or not file.content_type.startswith("image/"):
-            raise HTTPException(400, "이미지 파일만 가능합니다")
-
-        image_bytes = await file.read()
-
-        result = service.process_and_map(
-            image_bytes=image_bytes,
-            structurize=structurize,
-            include_overlay=include_overlay,
-        )
+        if not include_overlay:
+            result.words = None
 
         return result
 
     except HTTPException:
         raise
-    except ValueError as e:
-        logger.error(f"이미지 처리 오류: {e}")
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        logger.error(f"OCR 처리 중 오류: {e}")
-        raise HTTPException(500, f"OCR 처리 실패: {str(e)}")
+    except FileNotFoundError:
+        raise HTTPException(404, f"파일을 찾을 수 없습니다: {request.s3_key}")
+    except Exception as exc:
+        logger.error(f"OCR processing failed: {exc}")
+        raise HTTPException(500, f"OCR 처리 실패: {exc}")
+
+
+@router.post("/ocr/full", response_model=ContractOCRResponse, summary="이미지 직접 업로드 OCR")
+async def run_ocr_full(
+    file: UploadFile = File(...),
+    structurize: bool = Query(True, description="Run contract structuring"),
+    include_overlay: bool = Query(True, description="Include OCR word boxes in response"),
+    service: OCRService = Depends(get_ocr_service),
+):
+    try:
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(400, "이미지 파일만 가능합니다.")
+
+        original_image_bytes = await file.read()
+        pre_mask_result = await _prepare_image_for_ocr(original_image_bytes)
+
+        ocr_include_overlay = include_overlay or settings.ENABLE_MASKING
+        result = await asyncio.to_thread(
+            service.process_and_map,
+            image_bytes=pre_mask_result.image_bytes,
+            structurize=structurize,
+            include_overlay=ocr_include_overlay,
+        )
+        result = _apply_text_masking_to_result(result)
+
+        if not include_overlay:
+            result.words = None
+
+        return result
+
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        logger.error(f"Invalid image input: {exc}")
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        logger.error(f"OCR processing failed: {exc}")
+        raise HTTPException(500, f"OCR 처리 실패: {exc}")

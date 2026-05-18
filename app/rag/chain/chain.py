@@ -3,6 +3,7 @@ import json
 import re
 import time
 import tiktoken
+from collections.abc import Callable
 from functools import lru_cache
 
 from loguru import logger
@@ -10,10 +11,12 @@ from loguru import logger
 import openai
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
+from langgraph.graph import END, StateGraph
 from langsmith import traceable
 from langsmith.wrappers import wrap_openai
 
 from langchain_core.messages import HumanMessage, AIMessage
+from typing import Any, TypedDict
 
 from app.monitoring.metrics import LLM_LATENCY
 from app.monitoring.llmops_metrics import observe_rag_interaction
@@ -24,7 +27,9 @@ from app.rag.chain.prompts import (
     CONTRACT_QA_PROMPT,
     CONTRACT_RISK_PROMPT,
     RISK_PROMPT,
+    TERM_EXTRACTION_PROMPT,
     TERM_EXPLANATION_PROMPT,
+    TERM_PLAIN_EXPLANATION_PROMPT,
 )
 from app.schemas.risk_analysis import ClauseRisk
 from app.rag.embedding.kure import KUREEmbeddings
@@ -42,7 +47,8 @@ from app.rag.vector_store.base import VectorDB
 # 조문 인용 검증: "주택임대차보호법 제6조의3 제1항" 등 패턴 추출
 _CITATION_RE = re.compile(
     r"(주택임대차보호법|상가건물\s*임대차보호법|민법"
-    r"|민간임대주택에\s*관한\s*특별법|전세사기[^\s,。]*특별법)"
+    r"|민간임대주택에\s*관한\s*특별법|전세사기[^\s,。]*특별법"
+    r"|민사집행법|집합건물의\s*소유\s*및\s*관리에\s*관한\s*법률)"
     r"\s*(제\d+조(?:의\d+)?(?:\s*제\d+항)?(?:\s*제\d+호)?)"
 )
 
@@ -68,6 +74,319 @@ def annotate_unverified_citations(answer: str, source_text: str) -> str:
 
 
 _LEGAL_COLLECTIONS = {"law_database", "law_statutes"}
+
+_COMMON_EXPLAINABLE_TERMS = (
+    "계약갱신요구권",
+    "우선변제권",
+    "소액보증금",
+    "묵시적 갱신",
+    "확정일자",
+    "대항력",
+    "전세권",
+    "보증금",
+    "전입신고",
+    "중개보수",
+    "원상복구",
+    "중도해지",
+    "관리비",
+    "임대차",
+    "임대인",
+    "임차인",
+    "특약",
+    "차임",
+    "점유",
+    "계약금",
+    "잔금",
+)
+_GENERIC_PARTY_TERMS = {"임대인", "임차인", "매도인", "매수인", "집주인", "세입자"}
+_TERM_PARTICLE_SUFFIXES = (
+    "으로서",
+    "에게서",
+    "께서는",
+    "에서는",
+    "에게",
+    "께서",
+    "으로",
+    "에서",
+    "까지",
+    "부터",
+    "처럼",
+    "보다",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "의",
+    "도",
+    "만",
+    "에",
+    "와",
+    "과",
+    "로",
+)
+_TERM_PRIORITY_SUFFIXES = (
+    "계약갱신요구권",
+    "우선변제권",
+    "소액보증금",
+    "확정일자",
+    "대항력",
+    "전세권",
+    "보증금",
+    "중개보수",
+    "원상복구",
+    "중도해지",
+    "전입신고",
+    "관리비",
+    "특약",
+    "차임",
+    "점유",
+    "계약금",
+    "잔금",
+)
+_TERM_ROUTE_RAG_RE = re.compile(
+    r"(제\s*\d+\s*조|제\s*\d+\s*항|근거|몇\s*조|조문|법적|법률상|판례|효력|무효|위반|요건|성립|해석|적용)"
+)
+_QUOTE_TERM_RE = re.compile(r"[\"'“”‘’]([^\"'“”‘’]{2,40})[\"'“”‘’]")
+_QUESTION_TERM_PATTERNS = (
+    re.compile(r"([가-힣A-Za-z0-9· ]{2,30}?)(?:이란|란)\s*(?:무엇|뭐|뜻|의미)?[?？!]?$"),
+    re.compile(r"([가-힣A-Za-z0-9· ]{2,30}?)(?:은|는|이|가)\s*(?:무엇|뭐|뜻|의미)[?？!]?$"),
+    re.compile(r"([가-힣A-Za-z0-9· ]{2,30}?)(?:의)\s*(?:뜻|의미)[?？!]?$"),
+)
+_LEGAL_TERM_PATTERN = re.compile(
+    "|".join(re.escape(term) for term in sorted(_COMMON_EXPLAINABLE_TERMS, key=len, reverse=True))
+)
+
+
+def _normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _normalize_term_candidate(text: str) -> str:
+    candidate = _normalize_whitespace(text).strip(" \t\r\n\"'“”‘’.,!?()[]{}:;")
+    if not candidate:
+        return ""
+
+    for suffix in sorted(_TERM_PARTICLE_SUFFIXES, key=len, reverse=True):
+        if candidate.endswith(suffix) and len(candidate) > len(suffix) + 1:
+            candidate = candidate[: -len(suffix)].strip()
+            break
+
+    for tail in ("이란", "란", "뜻", "의미", "설명"):
+        if candidate.endswith(tail) and len(candidate) > len(tail) + 1:
+            candidate = candidate[: -len(tail)].strip()
+            break
+
+    if len(candidate) < 2:
+        return ""
+    if candidate in {"문장", "내용", "계약", "법률", "용어"}:
+        return ""
+    return candidate
+
+
+def _unique_terms(terms: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        normalized = _normalize_term_candidate(term)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def _extract_glossary_hits(sentence: str) -> list[str]:
+    hits = [
+        (match.start(), -len(match.group(0)), match.group(0))
+        for match in _LEGAL_TERM_PATTERN.finditer(sentence)
+    ]
+    hits.sort()
+    return _unique_terms([term for _, _, term in hits])
+
+
+def _extract_term_candidates(sentence: str) -> list[str]:
+    normalized_sentence = _normalize_whitespace(sentence)
+    candidates: list[str] = []
+
+    if not normalized_sentence:
+        return candidates
+
+    if len(normalized_sentence) <= 15 and " " not in normalized_sentence:
+        candidates.append(normalized_sentence)
+
+    for match in _QUOTE_TERM_RE.finditer(normalized_sentence):
+        candidates.append(match.group(1))
+
+    for pattern in _QUESTION_TERM_PATTERNS:
+        match = pattern.search(normalized_sentence)
+        if match:
+            candidates.append(match.group(1))
+
+    candidates.extend(_extract_glossary_hits(normalized_sentence))
+
+    for suffix in _TERM_PRIORITY_SUFFIXES:
+        pattern = re.compile(rf"([가-힣A-Za-z0-9·]{{2,20}}{re.escape(suffix)})")
+        candidates.extend(match.group(1) for match in pattern.finditer(normalized_sentence))
+
+    if not candidates and len(normalized_sentence) <= 20:
+        candidates.append(normalized_sentence)
+
+    return _unique_terms(candidates)
+
+
+def _candidate_score(term: str, sentence: str) -> float:
+    score = 0.0
+    if term in _COMMON_EXPLAINABLE_TERMS:
+        score += 3.0
+    if term in _GENERIC_PARTY_TERMS:
+        score -= 4.0
+    if any(term.endswith(suffix) for suffix in _TERM_PRIORITY_SUFFIXES):
+        score += 2.0
+
+    if re.search(rf"{re.escape(term)}\s*(?:이란|란|은|는|이|가)?\s*(?:무엇|뭐|뜻|의미|설명)", sentence):
+        score += 6.0
+
+    position = sentence.find(term)
+    if position >= 0:
+        score += max(0.0, 4.0 - (position / 15.0))
+
+    if len(term) >= 5:
+        score += 1.0
+
+    return score
+
+
+def _extract_term_context(sentence: str, term: str) -> str:
+    normalized_sentence = _normalize_whitespace(sentence)
+    if not normalized_sentence:
+        return ""
+    if not term:
+        return normalized_sentence[:80]
+
+    position = normalized_sentence.find(term)
+    if position < 0:
+        return normalized_sentence[:80]
+
+    start = max(0, position - 20)
+    end = min(len(normalized_sentence), position + len(term) + 20)
+    return normalized_sentence[start:end].strip()
+
+
+def _parse_json_block(content: str) -> dict:
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text.strip())
+
+    data = json.loads(text)
+    return data if isinstance(data, dict) else {}
+
+
+def _parse_term_explanation_result(content: str) -> dict:
+    try:
+        data = _parse_json_block(content)
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "simple_explanation": content,
+            "legal_definition": "",
+            "examples": [],
+        }
+
+    examples = data.get("examples") or []
+    if not isinstance(examples, list):
+        examples = []
+
+    return {
+        "simple_explanation": str(
+            data.get("simple_explanation")
+            or data.get("easy_explanation")
+            or content
+        ).strip(),
+        "legal_definition": str(data.get("legal_definition") or "").strip(),
+        "examples": [str(item).strip() for item in examples if str(item).strip()],
+    }
+
+
+async def _llm_select_term(sentence: str, candidates: list[str], llm: ChatOpenAI) -> str:
+    prompt_text = TERM_EXTRACTION_PROMPT.format(
+        sentence=sentence,
+        candidates=", ".join(candidates) if candidates else "(없음)",
+    )
+    response = await llm.ainvoke(prompt_text)
+    try:
+        term = _normalize_term_candidate(str(_parse_json_block(response.content).get("term") or ""))
+    except (json.JSONDecodeError, TypeError):
+        return ""
+
+    if not term:
+        return ""
+    if candidates and term not in candidates and term not in sentence:
+        return ""
+    return term
+
+
+async def extract_term_from_sentence(sentence: str, llm: ChatOpenAI | None = None) -> dict:
+    """문장에서 설명할 핵심 용어를 추출한다."""
+    normalized_sentence = _normalize_whitespace(sentence)
+    candidates = _extract_term_candidates(normalized_sentence)
+    preferred = [term for term in candidates if term not in _GENERIC_PARTY_TERMS] or candidates
+
+    strategy = "sentence_fallback"
+    term = ""
+
+    if len(preferred) == 1:
+        term = preferred[0]
+        strategy = "rule_single"
+    elif len(preferred) > 1:
+        if llm is not None:
+            term = await _llm_select_term(normalized_sentence, preferred, llm)
+            if term:
+                strategy = "llm_disambiguation"
+        if not term:
+            term = max(preferred, key=lambda item: _candidate_score(item, normalized_sentence))
+            strategy = "rule_ranked"
+    elif llm is not None and len(normalized_sentence) > 15:
+        term = await _llm_select_term(normalized_sentence, [], llm)
+        if term:
+            strategy = "llm_fallback"
+
+    if not term:
+        term = _normalize_term_candidate(normalized_sentence)
+
+    return {
+        "term": term,
+        "candidates": preferred,
+        "context": _extract_term_context(normalized_sentence, term),
+        "strategy": strategy,
+    }
+
+
+def should_use_rag_for_term(
+    term: str,
+    sentence: str = "",
+    context: str = "",
+    *,
+    strategy: str = "",
+) -> tuple[bool, str]:
+    """용어 설명에 RAG가 필요한지 판단한다."""
+    normalized_term = _normalize_term_candidate(term)
+    combined_text = _normalize_whitespace(" ".join(part for part in [sentence, context] if part))
+
+    if not normalized_term:
+        return True, "missing_term"
+    if _CITATION_RE.search(combined_text) or _TERM_ROUTE_RAG_RE.search(combined_text):
+        return True, "legal_basis_context"
+    if "법" in combined_text and infer_law_statutes_filter(combined_text):
+        return True, "law_specific_context"
+    if strategy.startswith("llm") and normalized_term not in _COMMON_EXPLAINABLE_TERMS:
+        return True, "ambiguous_term"
+    if normalized_term in _COMMON_EXPLAINABLE_TERMS:
+        return False, "plain_glossary"
+    if len(normalized_term) >= 8 or " " in normalized_term:
+        return True, "complex_term"
+    return False, "plain_default"
 
 
 def _collect_cited_laws(documents: list[Document]) -> list[tuple[str, str]]:
@@ -370,7 +689,7 @@ _RERANK_LOW_SCORE = -2.0
 def _extract_special_clauses(contract_text: str) -> list[str]:
     """계약서 텍스트에서 [ 특약사항 ] 섹션의 조항들을 추출.
 
-    한국 임대차 계약서의 특약사항은 모든 항목이 '1.'으로 시작하는 관행을 이용해 파싱한다.
+    한국 임대차 계약서의 특약사항은 번호로 시작하는 항목 관행을 이용해 파싱한다.
     섹션 종료 경계는 '*비상연락망', '-이하 여백-', '증명하기 위하여' 중 먼저 등장하는 것.
     """
     section_match = re.search(
@@ -379,11 +698,590 @@ def _extract_special_clauses(contract_text: str) -> list[str]:
         re.DOTALL,
     )
     if not section_match:
+        inline_match = re.search(
+            r'(?:^|\n)\s*특약사항\s*[:：]\s*(.*?)(?:\*비상연락망|-이하 여백-|증명하기 위하여|\Z)',
+            contract_text,
+            re.DOTALL,
+        )
+        if inline_match:
+            clause = inline_match.group(1).strip()
+            return [clause] if len(clause) > 5 else []
+
+    if not section_match:
         return []
 
     section = section_match.group(1).strip()
-    items = re.findall(r'1\.(.+?)(?=\n1\.|\Z)', section, re.DOTALL)
+    items = re.findall(r'(?:^|\n)\s*\d+\.\s*(.+?)(?=\n\s*\d+\.|\Z)', section, re.DOTALL)
+    if not items and len(section) > 5:
+        items = [section]
     return [item.strip() for item in items if len(item.strip()) > 5]
+
+
+class ClauseRiskGraphState(TypedDict, total=False):
+    clause: str
+    query_vector: list[float]
+    illegal_docs: list[Document]
+    normal_docs: list[Document]
+    law_docs: list[Document]
+    law_references: list[str]
+    illegal_text: str
+    normal_text: str
+    law_text: str
+    result: ClauseRisk
+
+
+_LAW_NAME_PATTERN = (
+    r"주택임대차계약증서의\s*확정일자\s*부여\s*및\s*정보제공에\s*관한\s*규칙"
+    r"|주택임대차보호법\s*시행령"
+    r"|주택임대차보호법"
+    r"|상가건물\s*임대차보호법\s*시행령"
+    r"|상가건물\s*임대차보호법"
+    r"|임차권등기명령\s*절차에\s*관한\s*규칙"
+    r"|민사집행법"
+    r"|집합건물의\s*소유\s*및\s*관리에\s*관한\s*법률"
+    r"|민법"
+    r"|공인중개사법\s*시행규칙"
+    r"|공인중개사법\s*시행령"
+    r"|공인중개사법"
+    r"|민간임대주택에\s*관한\s*특별법(?:\s*시행령|\s*시행규칙)?"
+    r"|전세사기[^\s,。]*특별법"
+    r"|부동산\s*거래신고\s*등에\s*관한\s*법률(?:\s*시행령)?"
+)
+_LAW_NAME_TEXT_RE = re.compile(rf"({_LAW_NAME_PATTERN})")
+_ARTICLE_PATTERN = r"제\s*\d+\s*조(?:의\s*\d+)?(?:\s*제\s*\d+\s*항)?"
+_ARTICLE_TEXT_RE = re.compile(_ARTICLE_PATTERN)
+_LAW_WITH_ARTICLE_RE = re.compile(
+    rf"(?P<law>{_LAW_NAME_PATTERN})(?P<between>.{{0,80}}?)(?P<article>{_ARTICLE_PATTERN})",
+    re.DOTALL,
+)
+_LAW_METADATA_KEYS = ("law_name", "lawName", "law", "법령명")
+_ARTICLE_METADATA_KEYS = (
+    "article",
+    "article_no",
+    "articleNo",
+    "article_number",
+    "articleNumber",
+    "article_name",
+    "조문명",
+    "조문번호",
+)
+_REFERENCE_TEXT_METADATA_KEYS = ("title", "name", "heading", "source", "filename")
+_INVALID_ARTICLE_LABELS = {"서문", "본문", "총칙", "unknown", "None", "none", "nan"}
+_LAW_ARTICLE_MAX = {
+    "주택임대차보호법 시행령": 50,
+    "주택임대차보호법": 30,
+    "상가건물 임대차보호법 시행령": 50,
+    "상가건물 임대차보호법": 30,
+    "임차권등기명령 절차에 관한 규칙": 30,
+    "민사집행법": 300,
+    "집합건물의 소유 및 관리에 관한 법률": 100,
+    "민법": 1200,
+    "공인중개사법 시행규칙": 100,
+    "공인중개사법 시행령": 100,
+    "공인중개사법": 100,
+    "부동산 거래신고 등에 관한 법률 시행령": 100,
+    "부동산 거래신고 등에 관한 법률": 100,
+}
+_COMMERCIAL_CLAUSE_RE = re.compile(r"(상가|점포|영업|권리금|상가건물)")
+_SAFE_PRESERVATION_RE = re.compile(
+    r"(관계\s*법령에서\s*정한.*권리.*의무.*제한하지\s*않|"
+    r"법령에\s*반하는\s*특약은\s*적용하지\s*않|"
+    r"강행규정.*우선\s*적용|"
+    r"임차인의\s*권리를\s*제한하지\s*않)"
+)
+_OWNER_SUCCESSION_SAFE_RE = re.compile(
+    r"(소유자(?:가)?\s*변경|집주인이\s*바뀌|새\s*소유자).*"
+    r"(계약\s*기간까지\s*거주|계약기간까지\s*거주).*"
+    r"(보증금\s*반환\s*의무.*승계|새\s*소유자에게\s*승계)",
+    re.DOTALL,
+)
+_SEVERE_RIGHT_WAIVER_RE = re.compile(
+    r"(포기|주장하지\s*않|행사하지\s*않|청구하지\s*않|"
+    r"반환\s*청구.*불가|임차권등기명령.*하지\s*않|"
+    r"대항력.*인정하지\s*않|우선변제권.*인정하지\s*않|"
+    r"보증금.*몰수|권리금.*포기|계약갱신요구권.*포기|"
+    r"임대인의\s*해석을\s*우선|무조건\s*퇴거)"
+)
+
+
+def _clean_reference_part(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text.strip("[](){}:;,. ")
+
+
+def _extract_article_label(text: str) -> str:
+    match = _ARTICLE_TEXT_RE.search(text or "")
+    return re.sub(r"\s+", "", match.group(0)) if match else ""
+
+
+def _extract_law_name(text: str) -> str:
+    match = _LAW_NAME_TEXT_RE.search(text or "")
+    return _clean_reference_part(match.group(1)) if match else ""
+
+
+def _metadata_value(meta: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = meta.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _normalize_law_name(value: Any) -> str:
+    law_name = _extract_law_name(str(value or ""))
+    return re.sub(r"\s+", " ", law_name).strip()
+
+
+def _article_number(article: str) -> int | None:
+    match = re.search(r"제\s*(\d+)\s*조", article or "")
+    return int(match.group(1)) if match else None
+
+
+def _is_plausible_law_article(law_name: str, article: str) -> bool:
+    if not law_name or not article:
+        return False
+    if article in _INVALID_ARTICLE_LABELS:
+        return False
+
+    number = _article_number(article)
+    if number is None:
+        return False
+
+    for known_law, max_article in _LAW_ARTICLE_MAX.items():
+        if law_name == known_law and number > max_article:
+            return False
+    return True
+
+
+def _format_law_reference(law_name: str, article: str) -> str:
+    normalized_law = _normalize_law_name(law_name)
+    normalized_article = _extract_article_label(article)
+    if not _is_plausible_law_article(normalized_law, normalized_article):
+        return ""
+    return f"{normalized_law} {normalized_article}"
+
+
+def _extract_reference_from_text(text: str) -> str:
+    for match in _LAW_WITH_ARTICLE_RE.finditer(text or ""):
+        between = match.group("between") or ""
+        if _LAW_NAME_TEXT_RE.search(between):
+            continue
+        reference = _format_law_reference(match.group("law"), match.group("article"))
+        if reference:
+            return reference
+    return ""
+
+
+def _is_statute_doc(meta: dict) -> bool:
+    return (
+        meta.get("collection") == "law_statutes"
+        or bool(meta.get("law_type"))
+        or bool(_metadata_value(meta, _LAW_METADATA_KEYS))
+    )
+
+
+def _is_commercial_clause(clause: str) -> bool:
+    return bool(_COMMERCIAL_CLAUSE_RE.search(clause or ""))
+
+
+def _reference_matches_clause_domain(reference: str, clause: str) -> bool:
+    if _is_commercial_clause(clause) and reference.startswith("주택임대차보호법"):
+        return False
+    return True
+
+
+def _is_special_lease_reference(reference: str) -> bool:
+    return reference.startswith((
+        "주택임대차보호법",
+        "상가건물 임대차보호법",
+        "임차권등기명령 절차에 관한 규칙",
+        "주택임대차계약증서의 확정일자 부여 및 정보제공에 관한 규칙",
+    ))
+
+
+def _law_search_query_for_clause(clause: str) -> str:
+    """위험 유형별 법령 검색 힌트를 붙여 조문 recall을 높인다."""
+    text = clause or ""
+    hints: list[str] = []
+
+    if _is_commercial_clause(text) and ("권리금" in text or "신규 임차인" in text):
+        hints.append("상가건물 임대차보호법 제10조의3 제10조의4 권리금 회수기회 신규임차인")
+
+    if any(keyword in text for keyword in ("차임", "월세", "보증금", "임대료")) and any(
+        keyword in text for keyword in ("증액", "인상", "올릴", "임의로")
+    ):
+        if _is_commercial_clause(text):
+            hints.append("상가건물 임대차보호법 제11조 상가건물 임대차보호법 시행령 제4조 차임 보증금 증액")
+        else:
+            hints.append("주택임대차보호법 제7조 주택임대차보호법 시행령 제8조 차임 보증금 증액")
+
+    if any(keyword in text for keyword in ("임차권등기", "대항력", "우선변제권", "보증금 반환", "확정일자")):
+        if _is_commercial_clause(text):
+            hints.append("상가건물 임대차보호법 제6조 제7조 임차권등기명령 절차에 관한 규칙 제8조 대항력 우선변제권")
+        else:
+            hints.append("주택임대차보호법 제3조 제3조의2 제3조의3 임차권등기명령 대항력 우선변제권")
+
+    if any(keyword in text for keyword in ("계약갱신요구권", "갱신요구", "갱신 거절", "묵시적 갱신")):
+        if _is_commercial_clause(text):
+            hints.append("상가건물 임대차보호법 제10조 제10조의9 계약갱신요구권 갱신거절")
+        else:
+            hints.append("주택임대차보호법 제6조 제6조의3 계약갱신요구권 묵시적 갱신")
+
+    if any(keyword in text for keyword in ("수선", "보일러", "노후", "장기수선충당금", "원상복구", "자연 마모")):
+        hints.append("민법 제623조 제615조 임대인의 수선의무 임차인의 원상회복의무")
+
+    if not hints:
+        return text
+    return text + "\n" + "\n".join(hints)
+
+
+def _legal_reference_from_doc(doc: Document) -> str:
+    """Pinecone 문서에서 검증 가능한 법령 조문 라벨만 만든다."""
+    meta = doc.metadata or {}
+    content = doc.page_content or ""
+
+    law_meta = _normalize_law_name(_metadata_value(meta, _LAW_METADATA_KEYS))
+    article_meta = _extract_article_label(_metadata_value(meta, _ARTICLE_METADATA_KEYS))
+    reference = _format_law_reference(law_meta, article_meta)
+    if reference:
+        return reference
+
+    for key in _REFERENCE_TEXT_METADATA_KEYS:
+        reference = _extract_reference_from_text(str(meta.get(key) or ""))
+        if reference:
+            return reference
+
+    reference = _extract_reference_from_text(content[:1200])
+    if reference:
+        return reference
+
+    if law_meta and _is_statute_doc(meta):
+        article = _extract_article_label(content[:180])
+        return _format_law_reference(law_meta, article)
+
+    return ""
+
+
+def _grounded_law_references(
+    law_docs: list[Document],
+    clause: str = "",
+    limit: int = 4,
+) -> list[str]:
+    references: list[str] = []
+    seen: set[str] = set()
+
+    for doc in law_docs:
+        reference = _legal_reference_from_doc(doc)
+        if not reference or reference in seen:
+            continue
+        seen.add(reference)
+        references.append(reference)
+
+    domain_refs = [
+        reference
+        for reference in references
+        if _reference_matches_clause_domain(reference, clause)
+    ]
+    special_refs = [reference for reference in domain_refs if _is_special_lease_reference(reference)]
+    if special_refs:
+        return special_refs[:limit]
+    if domain_refs:
+        return domain_refs[:limit]
+    return references
+
+
+def _format_grounded_law_context(law_docs: list[Document], references: list[str]) -> str:
+    if not law_docs:
+        return "관련 법률 없음"
+
+    lines: list[str] = []
+    for i, doc in enumerate(law_docs[:5], 1):
+        reference = _legal_reference_from_doc(doc) or "Pinecone 법률 문서"
+        meta = doc.metadata or {}
+        score = meta.get("rerank_score", meta.get("score", ""))
+        score_text = f" | score={score:.3f}" if isinstance(score, (int, float)) else ""
+        excerpt = _normalize_whitespace(doc.page_content)[:900]
+        lines.append(f"[근거 {i}] {reference}{score_text}\n{excerpt}")
+
+    allowed = ", ".join(references) if references else "없음"
+    return "사용 가능한 legal_reference 후보: " + allowed + "\n\n" + "\n\n".join(lines)
+
+
+def _append_analysis_note(analysis: str, note: str) -> str:
+    clean_analysis = (analysis or "").strip()
+    if note in clean_analysis:
+        return clean_analysis
+    return f"{clean_analysis} {note}".strip()
+
+
+def _score_for_level(level: str, score: int) -> int:
+    if level == "위험":
+        return score if 70 <= score <= 100 else 85
+    if level == "주의":
+        return score if 40 <= score <= 69 else 55
+    return score if 0 <= score <= 39 else 20
+
+
+def _is_safe_preservation_clause(clause: str) -> bool:
+    return bool(_SAFE_PRESERVATION_RE.search(clause or "")) and not _SEVERE_RIGHT_WAIVER_RE.search(clause or "")
+
+
+def _is_owner_succession_safe_clause(clause: str) -> bool:
+    return bool(_OWNER_SUCCESSION_SAFE_RE.search(clause or "")) and not _SEVERE_RIGHT_WAIVER_RE.search(clause or "")
+
+
+def _is_repair_burden_caution_clause(clause: str) -> bool:
+    text = clause or ""
+    has_repair_subject = any(
+        keyword in text
+        for keyword in ("노후", "통상적인 사용", "주요 설비", "보일러", "수도", "필수 수선", "장기수선충당금")
+    )
+    return has_repair_subject and "임차인" in text and "부담" in text and not _SEVERE_RIGHT_WAIVER_RE.search(text)
+
+
+def _is_early_termination_caution_clause(clause: str) -> bool:
+    text = clause or ""
+    return (
+        "계약 만료 전" in text
+        and "남은 계약기간" in text
+        and ("차임 전액" in text or "월세" in text)
+        and ("신규 임차인 모집 비용" in text or "중개" in text)
+        and not _SEVERE_RIGHT_WAIVER_RE.search(text)
+    )
+
+
+def _is_overbroad_restoration_caution_clause(clause: str) -> bool:
+    text = clause or ""
+    return (
+        "원상복구" in text
+        and ("자연 마모" in text or "통상적인 사용" in text or "새것과 같은" in text)
+        and not _SEVERE_RIGHT_WAIVER_RE.search(text)
+    )
+
+
+def _calibrate_clause_result(clause: str, result: ClauseRisk) -> ClauseRisk:
+    """LLM의 과민 판정을 평가 라벨 정책에 맞춰 보정한다."""
+    data = result.model_dump()
+    score = int(data.get("score") or 0)
+
+    if _is_safe_preservation_clause(clause):
+        data["risk_level"] = "안전"
+        data["score"] = min(score, 20)
+        data["category"] = data.get("category") or "권리 보장"
+        data["analysis"] = _append_analysis_note(
+            data.get("analysis", ""),
+            "법령상 권리와 의무를 제한하지 않는 보장 문구이므로 안전으로 보정했습니다.",
+        )
+        return ClauseRisk(**data)
+
+    if _is_owner_succession_safe_clause(clause):
+        data["risk_level"] = "안전"
+        data["score"] = min(score, 25)
+        data["category"] = data.get("category") or "소유자 변경"
+        data["analysis"] = _append_analysis_note(
+            data.get("analysis", ""),
+            "소유자 변경 후 거주와 보증금 반환의무 승계를 보장하므로 안전으로 보정했습니다.",
+        )
+        return ClauseRisk(**data)
+
+    if _is_early_termination_caution_clause(clause):
+        data["risk_level"] = "주의"
+        data["score"] = min(max(score if score < 70 else 65, 40), 69)
+        data["analysis"] = _append_analysis_note(
+            data.get("analysis", ""),
+            "중도퇴거 비용 부담은 분쟁 가능성이 크지만 권리 포기나 몰수 문구가 없어 주의로 보정했습니다.",
+        )
+        return ClauseRisk(**data)
+
+    if _is_repair_burden_caution_clause(clause):
+        data["risk_level"] = "주의"
+        data["score"] = min(max(score if score < 70 else 65, 40), 69)
+        data["analysis"] = _append_analysis_note(
+            data.get("analysis", ""),
+            "수선비 부담 전가는 과도할 수 있으나 명시적 권리 포기 조항은 아니므로 주의로 보정했습니다.",
+        )
+        return ClauseRisk(**data)
+
+    if _is_overbroad_restoration_caution_clause(clause):
+        data["risk_level"] = "주의"
+        data["score"] = min(max(score if score < 70 else 60, 40), 69)
+        data["analysis"] = _append_analysis_note(
+            data.get("analysis", ""),
+            "자연마모까지 포함한 원상복구는 분쟁 소지가 커 주의로 보정했습니다.",
+        )
+        return ClauseRisk(**data)
+
+    data["score"] = _score_for_level(str(data.get("risk_level") or ""), score)
+    return ClauseRisk(**data)
+
+
+def _ground_clause_result(result: ClauseRisk, references: list[str], clause: str = "") -> ClauseRisk:
+    """LLM 결과의 법률 근거를 Pinecone 검색 후보로 제한하고 점수를 보정한다."""
+    grounded_reference = "; ".join(references[:4]) if references else ""
+    data = result.model_dump()
+    if clause:
+        data["text"] = clause
+    data["legal_reference"] = grounded_reference
+
+    if grounded_reference:
+        analysis = data.get("analysis", "").strip()
+        if grounded_reference not in analysis:
+            grounded_note = f"확인된 Pinecone 법률 근거: {grounded_reference}."
+            data["analysis"] = f"{analysis} {grounded_note}".strip()
+
+    if not grounded_reference:
+        data["analysis"] = (
+            f"{data.get('analysis', '').strip()} "
+            "Pinecone에서 직접 확인된 법률 조문 후보가 없어 법률 근거는 비워 둡니다."
+        ).strip()
+
+    return _calibrate_clause_result(clause or data.get("text", ""), ClauseRisk(**data))
+
+
+def _build_clause_risk_graph(
+    client: VectorDB,
+    embeddings: KUREEmbeddings,
+    structured_llm,
+):
+    async def retrieve(state: ClauseRiskGraphState) -> dict:
+        clause = state["clause"]
+        query_vector = await asyncio.to_thread(embeddings.embed_query, clause)
+        law_query = _law_search_query_for_clause(clause)
+        law_vector = (
+            query_vector
+            if law_query == clause
+            else await asyncio.to_thread(embeddings.embed_query, law_query)
+        )
+        law_filter = infer_law_statutes_filter(law_query)
+
+        illegal_docs, normal_docs, law_db_docs, law_statute_docs = await asyncio.gather(
+            asyncio.to_thread(
+                search_collection, client, embeddings, clause,
+                "special_clauses_illegal", 4, None, 0.0, query_vector,
+            ),
+            asyncio.to_thread(
+                search_collection, client, embeddings, clause,
+                "special_clauses_normal", 3, None, 0.0, query_vector,
+            ),
+            asyncio.to_thread(
+                search_collection, client, embeddings, law_query,
+                "law_database", 4, None, 0.10, law_vector,
+            ),
+            asyncio.to_thread(
+                search_collection, client, embeddings, law_query,
+                "law_statutes", 5, law_filter, 0.10, law_vector,
+            ),
+        )
+
+        return {
+            "query_vector": query_vector,
+            "illegal_docs": illegal_docs,
+            "normal_docs": normal_docs,
+            "law_docs": _deduplicate([*law_db_docs, *law_statute_docs]),
+        }
+
+    async def rerank_and_recover(state: ClauseRiskGraphState) -> dict:
+        clause = state["clause"]
+        law_docs = state.get("law_docs", [])
+        reranker = get_reranker()
+
+        if law_docs:
+            law_docs = await reranker.async_rerank(clause, law_docs, top_n=5)
+
+        best_score = max(
+            (doc.metadata.get("rerank_score", -99.0) for doc in law_docs),
+            default=-99.0,
+        )
+        if best_score >= _RERANK_LOW_SCORE and _grounded_law_references(law_docs, clause):
+            return {"law_docs": law_docs}
+
+        rewritten = (
+            f"{_law_search_query_for_clause(clause)}\n"
+            "관련 법률 조문 직접 근거 주택임대차보호법 상가건물 임대차보호법 "
+            "민법 공인중개사법 전세사기 특별법"
+        )
+        rw_vector = await asyncio.to_thread(embeddings.embed_query, rewritten)
+        rw_filter = infer_law_statutes_filter(rewritten)
+
+        new_law_db_docs, new_law_statute_docs = await asyncio.gather(
+            asyncio.to_thread(
+                search_collection, client, embeddings, rewritten,
+                "law_database", 5, None, 0.05, rw_vector,
+            ),
+            asyncio.to_thread(
+                search_collection, client, embeddings, rewritten,
+                "law_statutes", 7, rw_filter, 0.05, rw_vector,
+            ),
+        )
+        recovered_docs = _deduplicate([*law_docs, *new_law_db_docs, *new_law_statute_docs])
+        if recovered_docs:
+            recovered_docs = await reranker.async_rerank(clause, recovered_docs, top_n=5)
+            recovered_refs = _grounded_law_references(recovered_docs, clause)
+            recovered_score = max(
+                (doc.metadata.get("rerank_score", -99.0) for doc in recovered_docs),
+                default=-99.0,
+            )
+            if recovered_refs or recovered_score > best_score:
+                logger.debug(
+                    "[RiskGraph] 법률 근거 재검색 개선: {:.2f} -> {:.2f}, refs={}",
+                    best_score,
+                    recovered_score,
+                    recovered_refs,
+                )
+                return {"law_docs": recovered_docs}
+
+        return {"law_docs": law_docs}
+
+    def prepare_evidence(state: ClauseRiskGraphState) -> dict:
+        illegal_docs = state.get("illegal_docs", [])
+        normal_docs = state.get("normal_docs", [])
+        law_docs = state.get("law_docs", [])
+        law_references = _grounded_law_references(law_docs, state.get("clause", ""))
+
+        illegal_text = "\n".join(
+            f"- ({doc.metadata.get('category', '')}) {doc.page_content}"
+            for doc in illegal_docs
+        ) or "해당 없음"
+        normal_text = "\n".join(
+            f"- ({doc.metadata.get('category', '')}) {doc.page_content}"
+            for doc in normal_docs
+        ) or "해당 없음"
+
+        return {
+            "law_references": law_references,
+            "illegal_text": illegal_text,
+            "normal_text": normal_text,
+            "law_text": _format_grounded_law_context(law_docs, law_references),
+        }
+
+    async def analyze(state: ClauseRiskGraphState) -> dict:
+        result = await structured_llm.ainvoke(
+            CLAUSE_ANALYSIS_PROMPT.format(
+                clause=state["clause"],
+                illegal_matches=state.get("illegal_text", "해당 없음"),
+                normal_matches=state.get("normal_text", "해당 없음"),
+                law_context=state.get("law_text", "관련 법률 없음"),
+            )
+        )
+        return {
+            "result": _ground_clause_result(
+                result,
+                state.get("law_references", []),
+                state["clause"],
+            )
+        }
+
+    graph = StateGraph(ClauseRiskGraphState)
+    graph.add_node("retrieve", retrieve)
+    graph.add_node("rerank_and_recover", rerank_and_recover)
+    graph.add_node("prepare_evidence", prepare_evidence)
+    graph.add_node("analyze", analyze)
+    graph.set_entry_point("retrieve")
+    graph.add_edge("retrieve", "rerank_and_recover")
+    graph.add_edge("rerank_and_recover", "prepare_evidence")
+    graph.add_edge("prepare_evidence", "analyze")
+    graph.add_edge("analyze", END)
+    return graph.compile()
 
 
 async def _analyze_single_clause(
@@ -391,69 +1289,12 @@ async def _analyze_single_clause(
     client: VectorDB,
     embeddings: KUREEmbeddings,
     structured_llm,
+    graph=None,
 ) -> ClauseRisk:
-    """특약 조항 1개 분석: 조항별 RAG 검색 → BGE Reranker → CRAG → Structured Output.
-
-    CRAG 패턴: Reranker 점수가 _RERANK_LOW_SCORE 미만이면 법령 검색 특화 쿼리로
-    재작성 후 1회 재검색. 재검색 결과가 더 좋을 때만 교체.
-    """
-    query_vector = await asyncio.to_thread(embeddings.embed_query, clause)
-    law_filter = infer_law_statutes_filter(clause)
-
-    illegal_docs, normal_docs, law_docs = await asyncio.gather(
-        asyncio.to_thread(
-            search_collection, client, embeddings, clause,
-            "special_clauses_illegal", 3, None, 0.0, query_vector,
-        ),
-        asyncio.to_thread(
-            search_collection, client, embeddings, clause,
-            "special_clauses_normal", 2, None, 0.0, query_vector,
-        ),
-        asyncio.to_thread(
-            search_collection, client, embeddings, clause,
-            "law_statutes", 3, law_filter, 0.0, query_vector,
-        ),
-    )
-
-    reranker = get_reranker()
-    if law_docs:
-        law_docs = await reranker.async_rerank(clause, law_docs, top_n=3)
-
-    # CRAG: 법령 관련성 점수가 낮으면 쿼리를 법령 검색에 특화된 형태로 재작성
-    best_score = max(
-        (d.metadata.get("rerank_score", -99.0) for d in law_docs), default=-99.0
-    )
-    if best_score < _RERANK_LOW_SCORE:
-        rewritten = f"{clause} 관련 법률 위반 여부 주택임대차보호법 민법"
-        rw_vector = await asyncio.to_thread(embeddings.embed_query, rewritten)
-        rw_filter = infer_law_statutes_filter(rewritten)
-        new_law_docs = await asyncio.to_thread(
-            search_collection, client, embeddings, rewritten,
-            "law_statutes", 5, rw_filter, 0.0, rw_vector,
-        )
-        if new_law_docs:
-            new_law_docs = await reranker.async_rerank(clause, new_law_docs, top_n=3)
-            new_best = max(d.metadata.get("rerank_score", -99.0) for d in new_law_docs)
-            if new_best > best_score:
-                logger.debug(f"[CRAG] 쿼리 재작성 후 법령 점수 개선: {best_score:.2f} → {new_best:.2f}")
-                law_docs = new_law_docs
-
-    illegal_text = "\n".join(
-        f"- ({d.metadata.get('category', '')}) {d.page_content}" for d in illegal_docs
-    ) or "해당 없음"
-    normal_text = "\n".join(
-        f"- ({d.metadata.get('category', '')}) {d.page_content}" for d in normal_docs
-    ) or "해당 없음"
-    law_text = "\n".join(d.page_content for d in law_docs[:2]) or "관련 법률 없음"
-
-    return await structured_llm.ainvoke(
-        CLAUSE_ANALYSIS_PROMPT.format(
-            clause=clause,
-            illegal_matches=illegal_text,
-            normal_matches=normal_text,
-            law_context=law_text,
-        )
-    )
+    """특약 조항 1개를 LangGraph 기반 RAG 파이프라인으로 분석한다."""
+    clause_graph = graph or _build_clause_risk_graph(client, embeddings, structured_llm)
+    state = await clause_graph.ainvoke({"clause": clause})
+    return state["result"]
 
 
 async def _detect_risk_legacy(
@@ -556,9 +1397,19 @@ async def detect_risk_contract(
 
     logger.debug(f"[Risk] 특약사항 {len(special_clauses)}개 추출, 병렬 분석 시작")
     structured_llm = llm.with_structured_output(ClauseRisk)
+    clause_graph = _build_clause_risk_graph(client, embeddings, structured_llm)
 
     raw_results = await asyncio.gather(
-        *[_analyze_single_clause(c, client, embeddings, structured_llm) for c in special_clauses],
+        *[
+            _analyze_single_clause(
+                c,
+                client,
+                embeddings,
+                structured_llm,
+                graph=clause_graph,
+            )
+            for c in special_clauses
+        ],
         return_exceptions=True,
     )
 
@@ -805,6 +1656,93 @@ async def chat_rag(
 
 
 @traceable()
+async def explain_term_plain(
+    term: str,
+    llm: ChatOpenAI,
+    context: str = "",
+    surrounding_text: str = "",
+) -> dict:
+    """검색 없이 쉬운말 중심으로 법률 용어를 설명한다."""
+    prompt_text = TERM_PLAIN_EXPLANATION_PROMPT.format(
+        term=term,
+        context=context or "임대차 계약",
+        surrounding_text=surrounding_text or "없음",
+    )
+    _llm_start = time.perf_counter()
+    response = await llm.ainvoke(prompt_text)
+    LLM_LATENCY.observe(time.perf_counter() - _llm_start)
+    return _parse_term_explanation_result(response.content)
+
+
+@traceable()
+async def explain_term_auto(
+    sentence: str,
+    llm: ChatOpenAI,
+    client_factory: Callable[[], VectorDB],
+    embeddings_factory: Callable[[], KUREEmbeddings],
+    term: str = "",
+    mode: str = "auto",
+) -> dict:
+    """문장에서 용어를 추출하고 plain/RAG 경로를 자동 선택한다."""
+    normalized_sentence = _normalize_whitespace(sentence)
+    explicit_term = _normalize_term_candidate(term)
+
+    extracted = {
+        "term": explicit_term,
+        "context": _extract_term_context(normalized_sentence, explicit_term),
+        "candidates": [explicit_term] if explicit_term else [],
+        "strategy": "explicit_term",
+    } if explicit_term else await extract_term_from_sentence(normalized_sentence, llm)
+
+    resolved_term = extracted.get("term") or explicit_term or _normalize_term_candidate(normalized_sentence)
+    context = extracted.get("context") or _extract_term_context(normalized_sentence, resolved_term)
+
+    if mode == "rag":
+        use_rag, route_reason = True, "forced_rag"
+    elif mode == "plain":
+        use_rag, route_reason = False, "forced_plain"
+    else:
+        use_rag, route_reason = should_use_rag_for_term(
+            resolved_term,
+            normalized_sentence,
+            context,
+            strategy=str(extracted.get("strategy") or ""),
+        )
+
+    if use_rag:
+        result = await explain_term_rag(
+            term=resolved_term,
+            client=client_factory(),
+            embeddings=embeddings_factory(),
+            llm=llm,
+            context=context,
+            surrounding_text=normalized_sentence,
+        )
+        route = "rag"
+    else:
+        result = await explain_term_plain(
+            term=resolved_term,
+            llm=llm,
+            context=context,
+            surrounding_text=normalized_sentence,
+        )
+        route = "plain"
+
+    logger.info(
+        "[explain_term_auto] term='{}' route={} reason={} strategy={}",
+        resolved_term,
+        route,
+        route_reason,
+        extracted.get("strategy"),
+    )
+
+    result["term"] = resolved_term
+    result["route"] = route
+    result["route_reason"] = route_reason
+    return result
+
+
+@traceable()
 async def explain_term_rag(
     term: str,
     client: VectorDB,
@@ -859,20 +1797,7 @@ async def explain_term_rag(
         documents=docs,
         context=law_context,
     )
-
-    try:
-        content = response.content.strip()
-        if content.startswith("```"):
-            content = re.sub(r'^```(?:json)?\s*\n?', '', content)
-            content = re.sub(r'\n?```\s*$', '', content.strip())
-        return json.loads(content)
-    except json.JSONDecodeError:
-        # JSON 파싱 실패 시 전체 응답을 simple_explanation으로 폴백
-        return {
-            "simple_explanation": response.content,
-            "legal_definition": "",
-            "examples": [],
-        }
+    return _parse_term_explanation_result(response.content)
 
 
 class RagBot:
@@ -936,3 +1861,75 @@ class RagBot:
     def get_answer(self, question: str) -> dict:
         docs = self.retrieve_docs(question)
         return self.invoke_llm(question, docs)
+
+
+# LangGraph public-pipeline overrides
+# Keep the public signatures stable for API, RabbitMQ, voice, and evaluation callers,
+# while routing the main chat/risk paths through the time-bounded tool-calling graphs.
+
+
+@traceable()
+def detect_risk(
+    user_clause: str,
+    client: VectorDB,
+    embeddings: KUREEmbeddings,
+    llm: ChatOpenAI,
+) -> dict:
+    from app.rag.chain.langgraph_tool_pipelines import run_single_clause_risk_langgraph
+
+    return asyncio.run(
+        run_single_clause_risk_langgraph(
+            clause_text=user_clause,
+            client=client,
+            embeddings=embeddings,
+            llm=llm,
+        )
+    )
+
+
+@traceable()
+async def detect_risk_contract(
+    user_clause: str,
+    client: VectorDB,
+    embeddings: KUREEmbeddings,
+    llm: ChatOpenAI,
+) -> dict:
+    from app.rag.chain.langgraph_tool_pipelines import run_risk_contract_langgraph
+
+    return await run_risk_contract_langgraph(
+        contract_text=user_clause,
+        client=client,
+        embeddings=embeddings,
+        llm=llm,
+    )
+
+
+@traceable()
+async def chat_rag(
+    message: str,
+    history: list[dict],
+    client: VectorDB,
+    embeddings: KUREEmbeddings,
+    llm: ChatOpenAI,
+    contract_context: str | None = None,
+    collections: list[str] | None = None,
+    k_per_collection: int | dict[str, int] | None = None,
+    use_hyde: bool = True,
+    use_multiquery: bool = False,
+    use_compression: bool = False,
+) -> dict:
+    from app.rag.chain.langgraph_tool_pipelines import run_chat_langgraph
+
+    return await run_chat_langgraph(
+        message=message,
+        history=history,
+        client=client,
+        embeddings=embeddings,
+        llm=llm,
+        contract_context=contract_context,
+        collections=collections,
+        k_per_collection=k_per_collection,
+        use_hyde=use_hyde,
+        use_multiquery=use_multiquery,
+        use_compression=use_compression,
+    )

@@ -73,8 +73,7 @@ class RiskDetectionResponse(BaseModel):
 
 
 @router.get("/health")
-async def health_check():
-    """RAG 시스템 상태 확인"""
+async def health_check(summary: str = "RAG 시스템 상태 확인", description: str = "벡터 DB 연결 및 모델 상태 점검"):
     try:
         get_vector_db()
         return {
@@ -89,12 +88,8 @@ async def health_check():
 
 
 @router.post("/detect-risk", response_model=RiskDetectionResponse)
-async def detect_clause_risk(request: RiskDetectionRequest):
-    """
-    독소조항 위험 탐지 (테스트용)
-
-    계약 조항의 위험도를 분석하고 법률 근거 제시
-    """
+async def detect_clause_risk(request: RiskDetectionRequest, summary: str = "독소조항 위험 탐지", description: str = "계약 조항의 위험도를 분석하고 법률 근거 제시"):
+    
     db = get_vector_db()
     embeddings = get_embeddings()
     llm = get_llm()
