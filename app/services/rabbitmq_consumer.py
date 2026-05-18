@@ -12,6 +12,7 @@ from typing import Optional, Callable
 import aio_pika
 from aio_pika import ExchangeType, Message
 from loguru import logger
+from pydantic import ValidationError
 
 from app.core.config import settings
 from app.core.dependencies import get_vector_db, get_embeddings, get_llm, fetch_ocr_text
@@ -27,6 +28,13 @@ from app.rag.chain.chain import detect_risk_contract, build_context
 from app.rag.chain.prompts import CONTRACT_QA_PROMPT
 from app.rag.retriever.multi_retriever import async_search_multi_index
 
+# 재시도 정책
+MAX_RETRY_COUNT: int = 3          # 최대 재시도 횟수 (초과 시 DLQ)
+RETRY_DELAY_MS: int = 30_000      # 재시도 대기 시간 (밀리초, TTL 방식)
+
+# 재시도해도 의미 없는 오류 타입 — 잘못된 페이로드는 아무리 재시도해도 실패
+_NON_RETRYABLE = (json.JSONDecodeError, ValidationError, ValueError)
+
 
 class RabbitMQConsumer:
     """
@@ -41,6 +49,7 @@ class RabbitMQConsumer:
         self.connection: Optional[aio_pika.RobustConnection] = None
         self.channel: Optional[aio_pika.Channel] = None
         self.result_exchange: Optional[aio_pika.Exchange] = None
+        self.retry_exchange: Optional[aio_pika.Exchange] = None
         self._running = False
         self._consume_task: Optional[asyncio.Task] = None
 
@@ -62,6 +71,7 @@ class RabbitMQConsumer:
         self.connection = None
         self.channel = None
         self.result_exchange = None
+        self.retry_exchange = None
 
         try:
             self.connection = await aio_pika.connect_robust(
@@ -116,6 +126,40 @@ class RabbitMQConsumer:
             },
         )
         await analysis_queue.bind(analysis_exchange, routing_key=settings.ANALYSIS_ROUTING_KEY)
+        analysis_dlx = await self.channel.declare_exchange(
+            settings.ANALYSIS_EXCHANGE + ".dlx",
+            ExchangeType.DIRECT,
+            durable=True,
+        )
+        analysis_dlq = await self.channel.declare_queue(
+            settings.ANALYSIS_QUEUE + ".dlq",
+            durable=True,
+        )
+        await analysis_dlq.bind(
+            analysis_dlx,
+            routing_key=settings.ANALYSIS_ROUTING_KEY + ".failed",
+        )
+
+        # 재시도 Exchange/Queue — TTL 만료 후 메인 큐로 자동 복귀
+        self.retry_exchange = await self.channel.declare_exchange(
+            settings.ANALYSIS_EXCHANGE + ".retry",
+            ExchangeType.DIRECT,
+            durable=True,
+        )
+        retry_queue = await self.channel.declare_queue(
+            settings.ANALYSIS_QUEUE + ".retry",
+            durable=True,
+            arguments={
+                "x-message-ttl": RETRY_DELAY_MS,
+                "x-dead-letter-exchange": settings.ANALYSIS_EXCHANGE,
+                "x-dead-letter-routing-key": settings.ANALYSIS_ROUTING_KEY,
+            },
+        )
+        await retry_queue.bind(
+            self.retry_exchange,
+            routing_key=settings.ANALYSIS_ROUTING_KEY + ".retry",
+        )
+
         logger.info(f"RabbitMQ topology is ready: queue={settings.ANALYSIS_QUEUE}")
         return analysis_queue
 
@@ -131,6 +175,7 @@ class RabbitMQConsumer:
             and self.channel
             and not self.channel.is_closed
             and self.result_exchange is not None
+            and self.retry_exchange is not None
         )
 
     async def start_consuming(self):
@@ -161,6 +206,39 @@ class RabbitMQConsumer:
                     },
                 )
                 await analysis_queue.bind(analysis_exchange, routing_key=settings.ANALYSIS_ROUTING_KEY)
+                analysis_dlx = await self.channel.declare_exchange(
+                    settings.ANALYSIS_EXCHANGE + ".dlx",
+                    ExchangeType.DIRECT,
+                    durable=True
+                )
+                analysis_dlq = await self.channel.declare_queue(
+                    settings.ANALYSIS_QUEUE + ".dlq",
+                    durable=True,
+                )
+                await analysis_dlq.bind(
+                    analysis_dlx,
+                    routing_key=settings.ANALYSIS_ROUTING_KEY + ".failed",
+                )
+
+                # 재시도 Exchange/Queue
+                self.retry_exchange = await self.channel.declare_exchange(
+                    settings.ANALYSIS_EXCHANGE + ".retry",
+                    ExchangeType.DIRECT,
+                    durable=True,
+                )
+                retry_queue = await self.channel.declare_queue(
+                    settings.ANALYSIS_QUEUE + ".retry",
+                    durable=True,
+                    arguments={
+                        "x-message-ttl": RETRY_DELAY_MS,
+                        "x-dead-letter-exchange": settings.ANALYSIS_EXCHANGE,
+                        "x-dead-letter-routing-key": settings.ANALYSIS_ROUTING_KEY,
+                    },
+                )
+                await retry_queue.bind(
+                    self.retry_exchange,
+                    routing_key=settings.ANALYSIS_ROUTING_KEY + ".retry",
+                )
 
                 retry_delay = 5  # 연결 성공 시 재시도 딜레이 초기화
                 logger.info(f"Starting to consume from: {settings.ANALYSIS_QUEUE}")
@@ -169,8 +247,7 @@ class RabbitMQConsumer:
                     async for message in queue_iter:
                         if not self._running:
                             return
-                        async with message.process():
-                            await self._handle_message(message)
+                        await self._handle_message(message)
 
             except asyncio.CancelledError:
                 logger.info("[Consumer] Consuming cancelled")
@@ -185,27 +262,132 @@ class RabbitMQConsumer:
     async def _handle_message(self, message: aio_pika.IncomingMessage):
         job_id = "unknown"
         contract_id = 0
+
+        # ── 1. JSON 파싱 — 실패 시 재시도 불가 ──────────────────────────────
         try:
             body = json.loads(message.body.decode())
-            # Spring Boot는 camelCase(jobId)로 발행, snake_case(job_id)도 허용
-            job_id = body.get("jobId") or "unknown"
-            contract_id = body.get("contractId") or 0
-            logger.info(f"[Consumer] 수신: job_id={job_id}, contract_id={contract_id}")
+            job_id = body.get("jobId") or body.get("job_id") or "unknown"
+            contract_id = body.get("contractId") or body.get("contract_id") or 0
+            logger.info(f"[Consumer] Received: job_id={job_id}, contract_id={contract_id}")
+        except json.JSONDecodeError as exc:
+            await self._handle_non_retryable(message, job_id, contract_id, f"Invalid JSON: {exc}")
+            return
 
+        # ── 2. 페이로드 검증 — 실패 시 재시도 불가 ──────────────────────────
+        try:
             request = ContractAnalysisRequest(**body)
+        except ValidationError as exc:
+            await self._handle_non_retryable(message, job_id, contract_id, f"ValidationError: {exc}")
+            return
+
+        # ── 3. 분석 처리 ──────────────────────────────────────────────────────
+        retry_count = self._get_retry_count(message)
+        try:
             result = await self._process_analysis(request)
             await self._publish_result(result)
+            await message.ack()
+            logger.info(f"[Consumer] Completed: job_id={job_id} (retry={retry_count})")
 
-            logger.info(f"[Consumer] 완료: job_id={job_id}")
+        except _NON_RETRYABLE as exc:
+            # 재시도해도 같은 결과 — FAILED 발행 + ACK
+            await self._handle_non_retryable(message, job_id, contract_id, str(exc))
 
-        except json.JSONDecodeError as e:
-            logger.error(f"[Consumer] JSON decode error: {e}")
-            await self._publish_error(job_id, contract_id, f"Invalid JSON: {e}")
+        except Exception as exc:
+            if retry_count < MAX_RETRY_COUNT:
+                # 재시도 가능 — retry queue로 이동
+                await self._retry_message(message, job_id, contract_id, retry_count, exc)
+            else:
+                # 재시도 횟수 초과 — FAILED 발행 + DLQ
+                await self._handle_retry_exceeded(message, job_id, contract_id, exc)
 
-        except Exception as e:
-            logger.exception(f"[Consumer] Processing error: {type(e).__name__}: {e}")
-            await self._publish_error(job_id, contract_id, f"{type(e).__name__}: {e}")
+    def _get_retry_count(self, message: aio_pika.IncomingMessage) -> int:
+        """메시지 헤더에서 현재까지의 재시도 횟수를 읽는다."""
+        return int((message.headers or {}).get("x-retry-count", 0))
 
+    async def _handle_non_retryable(
+        self,
+        message: aio_pika.IncomingMessage,
+        job_id: str,
+        contract_id: int,
+        error_msg: str,
+    ) -> None:
+        """재시도 불가능한 오류: Spring Boot에 FAILED 결과 발행 후 ACK."""
+        logger.error(f"[Consumer] Non-retryable error: job_id={job_id} — {error_msg}")
+        try:
+            await self._publish_error(job_id, contract_id, error_msg)
+            await message.ack()
+        except Exception as exc:
+            logger.error(f"[Consumer] Failed to publish FAILED result, dead-lettering: {exc}")
+            await self._dead_letter_message(message, job_id, contract_id)
+
+    async def _retry_message(
+        self,
+        message: aio_pika.IncomingMessage,
+        job_id: str,
+        contract_id: int,
+        retry_count: int,
+        exc: Exception,
+    ) -> None:
+        """재시도 가능한 오류: retry queue에 재발행(TTL 대기 후 메인 큐 복귀) 후 ACK."""
+        next_count = retry_count + 1
+        logger.warning(
+            f"[Consumer] Retryable error ({next_count}/{MAX_RETRY_COUNT}): "
+            f"job_id={job_id} — {type(exc).__name__}: {exc}"
+        )
+        try:
+            headers = dict(message.headers or {})
+            headers["x-retry-count"] = next_count
+            headers["x-last-error"] = str(exc)[:200]
+
+            await self.retry_exchange.publish(
+                Message(
+                    body=message.body,
+                    content_type=message.content_type or "application/json",
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    headers=headers,
+                ),
+                routing_key=settings.ANALYSIS_ROUTING_KEY + ".retry",
+            )
+            await message.ack()
+            logger.info(
+                f"[Consumer] Queued for retry: job_id={job_id} attempt={next_count}/{MAX_RETRY_COUNT}"
+            )
+        except Exception as pub_exc:
+            logger.error(f"[Consumer] Failed to queue retry, dead-lettering: {pub_exc}")
+            await self._dead_letter_message(message, job_id, contract_id)
+
+    async def _handle_retry_exceeded(
+        self,
+        message: aio_pika.IncomingMessage,
+        job_id: str,
+        contract_id: int,
+        exc: Exception,
+    ) -> None:
+        """재시도 횟수 초과: Spring Boot에 FAILED 결과 발행 후 DLQ로 reject."""
+        error_msg = f"재시도 {MAX_RETRY_COUNT}회 초과: {type(exc).__name__}: {exc}"
+        logger.error(f"[Consumer] Retry limit exceeded: job_id={job_id} — {error_msg}")
+        try:
+            await self._publish_error(job_id, contract_id, error_msg)
+        except Exception as pub_exc:
+            logger.error(f"[Consumer] Failed to publish FAILED result after retry exceeded: {pub_exc}")
+        # FAILED 발행 여부와 무관하게 DLQ로 이동
+        await self._dead_letter_message(message, job_id, contract_id)
+
+    async def _dead_letter_message(
+        self,
+        message: aio_pika.IncomingMessage,
+        job_id: str,
+        contract_id: int,
+    ) -> None:
+        try:
+            await message.reject(requeue=False)
+            logger.warning(
+                f"[Consumer] Dead-lettered message: job_id={job_id}, contract_id={contract_id}"
+            )
+        except Exception as exc:
+            logger.error(
+                f"[Consumer] Failed to dead-letter message: job_id={job_id}, contract_id={contract_id}, error={exc}"
+            )
 
     async def _process_analysis(self, request: ContractAnalysisRequest) -> ContractAnalysisResult:
         """
@@ -275,35 +457,35 @@ class RabbitMQConsumer:
                     key_terms=key_terms,
                 )
 
-            # Risk 분석 결과 추가 (clauses가 빈 리스트여도 항상 포함해야 SSE analysis_result 이벤트 발행됨)
-            if risk_analysis_result:
-                risk_summary = risk_analysis_result.get("risk_summary", {})
-                clauses = risk_analysis_result.get("clauses") or []
-                total = len(clauses)
-                # JSON null → None 대비: or 0 으로 안전하게 처리
-                raw_score = float(risk_analysis_result.get("overall_risk_score") or 0)
-                result.risk_analysis = RiskAnalysisResult(
-                    total_clauses=total,
-                    overall_risk_score=raw_score,
-                    overall_risk_level=self._overall_risk_level(raw_score),
-                    risk_count=risk_summary.get("Risk", 0),
-                    caution_count=risk_summary.get("Caution", 0),
-                    safety_count=risk_summary.get("Safety", 0),
-                    risk_percentage=round(risk_summary.get("Risk", 0) / total * 100, 1) if total > 0 else 0.0,
-                    detected_clause_count=risk_summary.get("Risk", 0) + risk_summary.get("Caution", 0),
-                    clause_results=[
-                        ClauseRiskResult(
-                            clause_title=clause.get("category") or clause.get("title") or (clause.get("text") or "")[:40],
-                            clause_content=clause.get("content") or clause.get("text") or "",
-                            risk_level=clause.get("risk_level", "안전"),  # LLM이 필드 누락 시 KeyError 방지
-                            category=clause.get("category", ""),
-                            score=int(clause.get("score") or 0),          # null → None → int(None) TypeError 방지
-                            legal_reference=clause.get("legal_reference", ""),
-                            reasoning_summary=clause.get("analysis", ""),
-                        )
-                        for clause in clauses
-                    ],
-                )
+            # Risk 분석 결과 추가 — if 가드 없이 항상 설정해야 SSE analysis_result 이벤트가 발행됨.
+            # risk_analysis_result가 None/빈 dict이면 safe defaults로 처리.
+            _ra = risk_analysis_result or {}
+            risk_summary = _ra.get("risk_summary", {})
+            clauses = _ra.get("clauses") or []
+            total = len(clauses)
+            raw_score = float(_ra.get("overall_risk_score") or 0)
+            result.risk_analysis = RiskAnalysisResult(
+                total_clauses=total,
+                overall_risk_score=raw_score,
+                overall_risk_level=self._overall_risk_level(raw_score),
+                risk_count=risk_summary.get("Risk", 0),
+                caution_count=risk_summary.get("Caution", 0),
+                safety_count=risk_summary.get("Safety", 0),
+                risk_percentage=round(risk_summary.get("Risk", 0) / total * 100, 1) if total > 0 else 0.0,
+                detected_clause_count=risk_summary.get("Risk", 0) + risk_summary.get("Caution", 0),
+                clause_results=[
+                    ClauseRiskResult(
+                        clause_title=clause.get("category") or clause.get("title") or (clause.get("text") or "")[:40],
+                        clause_content=clause.get("content") or clause.get("text") or "",
+                        risk_level=clause.get("risk_level", "안전"),
+                        category=clause.get("category", ""),
+                        score=int(clause.get("score") or 0),
+                        legal_reference=clause.get("legal_reference", ""),
+                        reasoning_summary=clause.get("analysis", ""),
+                    )
+                    for clause in clauses
+                ],
+            )
 
             return result
 
