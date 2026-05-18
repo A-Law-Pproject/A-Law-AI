@@ -58,7 +58,7 @@ class MaskingMetadata(BaseModel):
         description="마스킹된 이미지의 S3 키"
     )
     masking_version: str = Field(
-        default="1.0",
+        default="1.1",
         alias="maskingVersion",
         description="마스킹 엔진 버전"
     )
