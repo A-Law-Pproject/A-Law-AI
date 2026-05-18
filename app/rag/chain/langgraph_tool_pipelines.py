@@ -1457,6 +1457,7 @@ async def run_single_clause_risk_langgraph(
         "normal_similarity": bundle["normal_similarity"],
         "risk_delta": bundle["risk_delta"],
         "analysis": analysis,
+        "legal_reference": first_clause.legal_reference,
         "illegal_matches": bundle["illegal_docs"],
         "normal_matches": bundle["normal_docs"],
         "law_matches": bundle["law_docs"],
