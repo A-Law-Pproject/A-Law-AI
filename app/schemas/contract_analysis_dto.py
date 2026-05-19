@@ -58,6 +58,7 @@ class ClauseRiskResult(BaseModel):
     category: str = Field(default="", alias="category")
     score: int = Field(default=0, alias="score")
     legal_reference: str = Field(default="", alias="legalReference")
+    related_work: str = Field(default="", alias="relatedWork")
     reasoning_summary: str = Field(default="", alias="reasoningSummary")
 
     class Config:

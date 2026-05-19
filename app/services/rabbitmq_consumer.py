@@ -24,7 +24,7 @@ from app.schemas.contract_analysis_dto import (
     ClauseRiskResult,
     AnalysisStatus
 )
-from app.rag.chain.chain import detect_risk_contract, build_context
+from app.rag.chain.chain import build_context, detect_risk_contract, _extract_reference_from_text
 from app.rag.chain.prompts import CONTRACT_QA_PROMPT
 from app.rag.retriever.multi_retriever import async_search_multi_index
 
@@ -60,6 +60,39 @@ class RabbitMQConsumer:
         if score >= 40:
             return "주의"
         return "안전"
+
+    @staticmethod
+    def _resolve_clause_legal_reference(clause: dict) -> str:
+        direct_reference = str(
+            clause.get("legal_reference")
+            or clause.get("legalReference")
+            or ""
+        ).strip()
+        if direct_reference:
+            return direct_reference
+
+        grounded_refs = clause.get("grounded_refs") or []
+        if isinstance(grounded_refs, list):
+            refs = [str(ref).strip() for ref in grounded_refs if str(ref).strip()]
+            if refs:
+                return "; ".join(refs[:4])
+
+        for key in ("analysis", "reasoning_summary", "reasoningSummary"):
+            extracted = _extract_reference_from_text(str(clause.get(key) or ""))
+            if extracted:
+                return extracted
+        return ""
+
+    @staticmethod
+    def _resolve_clause_related_work(clause: dict) -> str:
+        return str(
+            clause.get("related_work")
+            or clause.get("relatedWork")
+            or clause.get("analysis")
+            or clause.get("reasoning_summary")
+            or clause.get("reasoningSummary")
+            or ""
+        ).strip()
 
     async def connect(self):
         """RabbitMQ 연결 (기존 연결 정리 후 재연결)"""
@@ -481,7 +514,8 @@ class RabbitMQConsumer:
                         risk_level=clause.get("risk_level", "안전"),
                         category=clause.get("category", ""),
                         score=int(clause.get("score") or 0),
-                        legal_reference=clause.get("legal_reference", ""),
+                        legal_reference=self._resolve_clause_legal_reference(clause),
+                        related_work=self._resolve_clause_related_work(clause),
                         reasoning_summary=clause.get("analysis", ""),
                     )
                     for clause in clauses

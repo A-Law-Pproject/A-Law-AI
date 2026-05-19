@@ -861,6 +861,16 @@ def _format_law_reference(law_name: str, article: str) -> str:
     return f"{normalized_law} {normalized_article}"
 
 
+def _fallback_law_reference(law_name: str, article: str = "") -> str:
+    normalized_law = _normalize_law_name(law_name)
+    normalized_article = _extract_article_label(article)
+    if normalized_law and normalized_article:
+        return f"{normalized_law} {normalized_article}"
+    if normalized_law:
+        return normalized_law
+    return ""
+
+
 def _extract_reference_from_text(text: str) -> str:
     for match in _LAW_WITH_ARTICLE_RE.finditer(text or ""):
         between = match.group("between") or ""
@@ -945,6 +955,7 @@ def _legal_reference_from_doc(doc: Document) -> str:
     reference = _format_law_reference(law_meta, article_meta)
     if reference:
         return reference
+    fallback_reference = _fallback_law_reference(law_meta, article_meta)
 
     for key in _REFERENCE_TEXT_METADATA_KEYS:
         reference = _extract_reference_from_text(str(meta.get(key) or ""))
@@ -957,9 +968,13 @@ def _legal_reference_from_doc(doc: Document) -> str:
 
     if law_meta and _is_statute_doc(meta):
         article = _extract_article_label(content[:180])
-        return _format_law_reference(law_meta, article)
+        reference = _format_law_reference(law_meta, article)
+        if reference:
+            return reference
+        fallback_reference = _fallback_law_reference(law_meta, article) or fallback_reference
 
-    return ""
+    return fallback_reference
+
 
 
 def _grounded_law_references(
