@@ -24,6 +24,7 @@ router = APIRouter()
 
 class OCRRequest(BaseModel):
     s3_key: str = Field(..., description="S3 object key")
+    image_url: str | None = Field(None, description="S3 이미지 URL")
 
 
 def get_s3_client() -> S3Client:
@@ -34,10 +35,12 @@ def get_ocr_service() -> OCRService:
     return OCRService()
 
 
-async def save_ocr_result(s3_key: str, result: ContractOCRResponse) -> None:
+async def save_ocr_result(
+    s3_key: str, result: ContractOCRResponse, *, image_url: str | None = None
+) -> None:
     from app.core.dependencies import save_ocr_result as _save_ocr_result
 
-    await _save_ocr_result(s3_key, result)
+    await _save_ocr_result(s3_key, result, image_url=image_url)
 
 
 def _mask_nested_strings(value: Any, masker: TextMasker) -> Any:
@@ -96,7 +99,7 @@ async def run_ocr_from_s3(
         result = _apply_text_masking_to_result(result)
 
         try:
-            await save_ocr_result(request.s3_key, result)
+            await save_ocr_result(request.s3_key, result, image_url=request.image_url)
         except Exception as exc:
             logger.warning(f"Failed to save OCR result to MongoDB: {exc}")
 

@@ -128,6 +128,32 @@ def _format_sources(docs: list[Document], limit: int = 3) -> list[str]:
     return sources
 
 
+def _ensure_readable_markdown_answer(answer: str) -> str:
+    text = (answer or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Separate inline markdown sections and warnings so the renderer can preserve structure.
+    text = re.sub(r"(?<!\n)(?=##\s)", "\n\n", text)
+    text = re.sub(r"(?<!\n)[ \t]+(?=>\s)", "\n\n", text)
+
+    # Split numbered or bold bullet lists that the model sometimes emits on one long line.
+    text = re.sub(r"(?<=:)[ \t]+(?=(?:\d+\.\s+|-\s+\*\*))", "\n\n", text)
+    text = re.sub(r"(?<!\n)[ \t]+(?=(?:\d+\.\s+|-\s+\*\*))", "\n", text)
+
+    # Move wrap-up sentences out of the last list item when they start with common connectives.
+    text = re.sub(
+        r"(?<=[.!?])[ \t]+(?=(?:따라서|정리하면|결론적으로|즉,|즉\s|다만|한편|추가로))",
+        "\n\n",
+        text,
+    )
+
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def _compact_history(history: list[dict], limit: int = 6) -> str:
     lines: list[str] = []
     for item in history[-limit:]:
@@ -679,10 +705,12 @@ def _build_chat_context(state: ChatGraphState) -> tuple[str, list[Document]]:
 
 def _build_chat_fallback_answer(question: str, context: str, sources: list[str]) -> str:
     source_line = f"\n\n참고 출처: {', '.join(sources[:2])}" if sources else ""
-    return (
-        "죄송합니다. 현재 응답 생성에 시간이 더 걸리고 있습니다. "
-        "잠시 후 다시 시도해 주시거나, 질문을 좀 더 구체적으로 입력해 주세요."
-        f"{source_line}"
+    return _ensure_readable_markdown_answer(
+        (
+            "죄송합니다. 현재 응답 생성에 시간이 더 걸리고 있습니다. "
+            "잠시 후 다시 시도해 주시거나, 질문을 좀 더 구체적으로 입력해 주세요."
+            f"{source_line}"
+        )
     )
 
 
@@ -702,9 +730,13 @@ def _build_in_scope_guardrail_fallback(question: str, sources: list[str]) -> str
             "구체 판단을 위해서는 계약서의 관련 조항, 핵심 일정, 특약 내용을 함께 확인하시는 것이 좋습니다."
         )
     return (
-        "질문하신 내용은 임대차 범위 안에 있습니다. "
-        f"현재 자동 응답이 범위 밖 질문으로 잘못 처리되었습니다. {guidance}"
-        f"{source_line}"
+        _ensure_readable_markdown_answer(
+            (
+                "질문하신 내용은 임대차 범위 안에 있습니다. "
+                f"현재 자동 응답이 범위 밖 질문으로 잘못 처리되었습니다. {guidance}"
+                f"{source_line}"
+            )
+        )
     )
 
 
@@ -751,7 +783,7 @@ async def _repair_in_scope_rejection(
     repaired_answer = repaired.content
     if _is_scope_rejection_answer(repaired_answer):
         return _build_in_scope_guardrail_fallback(question, _format_sources(docs))
-    return repaired_answer
+    return _ensure_readable_markdown_answer(repaired_answer)
 
 
 def _should_force_caution(answer: str, evidence: dict[str, list[Document]]) -> bool:
@@ -1245,6 +1277,7 @@ def _build_chat_graph(
 
         if _should_force_caution(answer, state.get("evidence", {})):
             answer += "\n\n다만 이 결론은 조문과 판례 법리를 함께 더 확인해 단정하는 것이 안전합니다."
+        answer = _ensure_readable_markdown_answer(answer)
 
         observe_rag_interaction(
             endpoint="chat_rag_langgraph",

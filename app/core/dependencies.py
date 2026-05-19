@@ -181,30 +181,27 @@ async def fetch_contract_text(contract_id: int | str, s3_key: str | None = None)
     )
 
 
-async def save_ocr_result(s3_key: str, result) -> None:
+async def save_ocr_result(s3_key: str, result, *, image_url: str | None = None) -> None:
     """Upsert OCR results in MongoDB keyed by `s3_key`."""
     client = get_mongo_client()
     collection = client[settings.MONGODB_DB][settings.MONGODB_OCR_COLLECTION]
 
     data = result.model_dump(mode="json") if hasattr(result, "model_dump") else dict(result)
-    text = data.get("full_text") or data.get("markdown") or ""
 
     await collection.update_one(
-        {"$or": [{"s3Key": s3_key}, {"s3_key": s3_key}]},
+        {"s3_key": s3_key},
         {
             "$set": {
-                "s3Key": s3_key,
                 "s3_key": s3_key,
-                "rawText": text,
-                "raw_text": text,
-                "fullText": data.get("full_text", ""),
+                "image_url": image_url,
+                "image_width": data.get("image_width", 0),
+                "image_height": data.get("image_height", 0),
                 "full_text": data.get("full_text", ""),
                 "markdown": data.get("markdown", ""),
-                "words": data.get("words") or [],
-                "contractData": data.get("contract_data"),
+                "contract_data": data.get("contract_data"),
                 "validation": data.get("validation"),
-                "ocrSuccess": data.get("success", True),
-                "processingTime": data.get("processing_time", 0),
+                "words": data.get("words") or [],
+                "warnings": data.get("warnings") or [],
                 "updatedAt": datetime.now(timezone.utc),
             }
         },
