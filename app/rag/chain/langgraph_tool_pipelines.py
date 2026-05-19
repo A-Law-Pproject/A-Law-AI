@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from loguru import logger
 
-from app.core.dependencies import get_law_api_client, get_redis_client
+from app.core.dependencies import get_fast_llm, get_law_api_client, get_redis_client
 from app.monitoring.llmops_metrics import observe_rag_interaction
 from app.monitoring.metrics import (
     LLM_LATENCY,
@@ -72,6 +72,9 @@ RISK_TIMEOUT_SECONDS = 30.0
 CHAT_MAX_TOOL_ROUNDS = 1
 RISK_MAX_TOOL_ROUNDS = 2
 RISK_MAX_LLM_CLAUSES = 6
+
+# 컴파일된 그래프 캐시 — client/embeddings/llm은 싱글톤이므로 요청마다 재빌드 불필요
+_CHAT_GRAPH_CACHE: dict[tuple[int, int, int], Any] = {}
 
 
 def _remaining_seconds(deadline: float) -> float:
@@ -1154,8 +1157,17 @@ def _build_chat_graph(
             )
         )
 
-        with LLM_LATENCY.time():
-            response = await llm.bind_tools(tools).ainvoke([system, human])
+        # 도구 선택은 경량 모델(mini)로 실행 — 속도 우선, 최대 10s
+        selector_llm = get_fast_llm()
+        try:
+            with LLM_LATENCY.time():
+                response = await asyncio.wait_for(
+                    selector_llm.bind_tools(tools).ainvoke([system, human]),
+                    timeout=10.0,
+                )
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning("[ChatGraph:tool_selector] LLM skipped: {} — proceeding without tools", exc)
+            return {}
 
         messages = list(state.get("messages", []))
         messages.append(response)
@@ -1191,7 +1203,8 @@ def _build_chat_graph(
             except Exception as exc:
                 logger.debug("[ChatGraph] compression skipped: {}", exc)
 
-        if _remaining_seconds(state["deadline"]) < 0.5:
+        remaining = _remaining_seconds(state["deadline"])
+        if remaining < 0.5:
             answer = _build_chat_fallback_answer(state["question"], context, _format_sources(docs))
         else:
             history_messages = []
@@ -1205,9 +1218,17 @@ def _build_chat_graph(
                 history=history_messages,
                 question=state["question"],
             )
-            with LLM_LATENCY.time():
-                response = await llm.ainvoke(prompt_messages)
-            answer = response.content
+            answer_timeout = min(remaining - 0.3, 18.0)
+            try:
+                with LLM_LATENCY.time():
+                    response = await asyncio.wait_for(
+                        llm.ainvoke(prompt_messages),
+                        timeout=answer_timeout,
+                    )
+                answer = response.content
+            except (asyncio.TimeoutError, Exception) as exc:
+                logger.warning("[ChatGraph:answer_node] LLM timeout/error: {}", exc)
+                answer = _build_chat_fallback_answer(state["question"], context, _format_sources(docs))
 
         answer = await _repair_in_scope_rejection(
             question=state["question"],
@@ -1288,7 +1309,12 @@ async def run_chat_langgraph(
     use_multiquery: bool = False,
     use_compression: bool = False,
 ) -> dict:
-    graph = _build_chat_graph(client, embeddings, llm)
+    cache_key = (id(client), id(embeddings), id(llm))
+    graph = _CHAT_GRAPH_CACHE.get(cache_key)
+    if graph is None:
+        graph = _build_chat_graph(client, embeddings, llm)
+        _CHAT_GRAPH_CACHE[cache_key] = graph
+
     initial_state: ChatGraphState = {
         "messages": [],
         "question": message,
@@ -1308,19 +1334,25 @@ async def run_chat_langgraph(
         return await asyncio.wait_for(graph.ainvoke(initial_state), timeout=CHAT_TIMEOUT_SECONDS)
     except Exception as exc:
         logger.warning("[ChatGraph] fallback due to error: {} (type={})", exc, type(exc).__name__)
-        fast_docs = await _search_docs(
-            client,
-            embeddings,
-            message,
-            collections=collections or _CHAT_COLLECTIONS,
-            k_per_collection=k_per_collection or (_CHAT_K_PER_COLLECTION if _is_lease_related(message) else 2),
-            score_threshold={"law_database": 0.15, "law_statutes": 0.15, "contracts": 0.25, "default": 0.2},
-            rerank_top_n=5,
-            collection_filters={"law_statutes": infer_law_statutes_filter(message)} if infer_law_statutes_filter(message) else None,
-            use_hyde=use_hyde,
-            use_multiquery=use_multiquery,
-            llm=llm if (use_hyde or use_multiquery) else None,
-        )
+        try:
+            fast_docs = await asyncio.wait_for(
+                _search_docs(
+                    client,
+                    embeddings,
+                    message,
+                    collections=collections or _CHAT_COLLECTIONS,
+                    k_per_collection=k_per_collection or (_CHAT_K_PER_COLLECTION if _is_lease_related(message) else 2),
+                    score_threshold={"law_database": 0.15, "law_statutes": 0.15, "contracts": 0.25, "default": 0.2},
+                    rerank_top_n=5,
+                    collection_filters={"law_statutes": infer_law_statutes_filter(message)} if infer_law_statutes_filter(message) else None,
+                    use_hyde=False,
+                    use_multiquery=False,
+                ),
+                timeout=8.0,
+            )
+        except Exception as search_exc:
+            logger.warning("[ChatGraph] fallback search also failed: {}", search_exc)
+            fast_docs = []
         context = build_context(fast_docs, max_length=2200)
         answer = _build_chat_fallback_answer(message, context, _format_sources(fast_docs))
         observe_rag_interaction(
@@ -1586,8 +1618,8 @@ def _build_risk_graph(
             "당신은 한국 임대차 계약 리스크 분석 전문가입니다.\n"
             "아래 조항별 증거를 기반으로 위험/주의/안전을 분류하세요.\n"
             "규칙:\n"
-            "- legal_reference에는 각 조항의 grounded_refs에 있는 값만 쓰세요.\n"
-            "- grounded_refs가 없으면 legal_reference는 빈 문자열로 두세요.\n"
+            "- legal_reference에는 각 조항의 grounded_refs에 있는 값을 우선 사용하세요.\n"
+            "- grounded_refs가 없으면 해당 조항과 관련된 한국 법령 조문을 판단하여 기재하세요 (예: 주택임대차보호법 제3조).\n"
             "- 과도한 비용 부담, 원상복구 확대, 수선비 전가, 중도퇴거 부담은 우선 '주의'로 보고 명시적 권리 포기/몰수/행사 금지가 있을 때만 '위험'으로 올리세요.\n"
             "- 임차인 권리를 보장하는 문구는 '안전'으로 보세요.\n"
             "- JSON만 반환하세요.\n\n"

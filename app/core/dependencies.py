@@ -42,6 +42,9 @@ def get_embeddings() -> KUREEmbeddings:
     return _embeddings
 
 
+_fast_llm: ChatOpenAI | None = None
+
+
 def get_llm() -> ChatOpenAI:
     global _llm
     if _llm is None:
@@ -49,10 +52,24 @@ def get_llm() -> ChatOpenAI:
             model=settings.MODEL_NAME,
             api_key=settings.OPENAI_API_KEY,
             temperature=0,
-            timeout=300,
+            timeout=30,
         )
         logger.info(f"ChatOpenAI singleton initialized (model={settings.MODEL_NAME})")
     return _llm
+
+
+def get_fast_llm() -> ChatOpenAI:
+    """도구 선택·분류 전용 경량 LLM (gpt-4o-mini). 응답 품질보다 속도 우선."""
+    global _fast_llm
+    if _fast_llm is None:
+        _fast_llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            api_key=settings.OPENAI_API_KEY,
+            temperature=0,
+            timeout=12,
+        )
+        logger.info("ChatOpenAI (fast/mini) singleton initialized")
+    return _fast_llm
 
 
 def get_mongo_client() -> AsyncIOMotorClient:

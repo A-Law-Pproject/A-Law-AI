@@ -1116,24 +1116,23 @@ def _calibrate_clause_result(clause: str, result: ClauseRisk) -> ClauseRisk:
 
 
 def _ground_clause_result(result: ClauseRisk, references: list[str], clause: str = "") -> ClauseRisk:
-    """LLM 결과의 법률 근거를 Pinecone 검색 후보로 제한하고 점수를 보정한다."""
+    """LLM 결과의 법률 근거를 Pinecone 검색 후보로 우선 적용하고 점수를 보정한다.
+
+    Pinecone 그라운딩 성공 시: 검색된 조문으로 legal_reference 덮어쓰기.
+    Pinecone 그라운딩 실패 시: LLM이 생성한 legal_reference 그대로 유지.
+    """
     grounded_reference = "; ".join(references[:4]) if references else ""
     data = result.model_dump()
     if clause:
         data["text"] = clause
-    data["legal_reference"] = grounded_reference
 
     if grounded_reference:
+        data["legal_reference"] = grounded_reference
         analysis = data.get("analysis", "").strip()
         if grounded_reference not in analysis:
-            grounded_note = f"확인된 Pinecone 법률 근거: {grounded_reference}."
+            grounded_note = f"확인된 법률 근거: {grounded_reference}."
             data["analysis"] = f"{analysis} {grounded_note}".strip()
-
-    if not grounded_reference:
-        data["analysis"] = (
-            f"{data.get('analysis', '').strip()} "
-            "Pinecone에서 직접 확인된 법률 조문 후보가 없어 법률 근거는 비워 둡니다."
-        ).strip()
+    # Pinecone 그라운딩 실패 시 LLM이 생성한 legal_reference 값 유지
 
     return _calibrate_clause_result(clause or data.get("text", ""), ClauseRisk(**data))
 
