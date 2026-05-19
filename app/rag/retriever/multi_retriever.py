@@ -52,8 +52,8 @@ def _deduplicate(documents: list[Document]) -> list[Document]:
 _HYBRID_TARGET_COLLECTIONS = {
     "law_database",
     "law_statutes",
-    "special_clauses_illegal",
-    "special_clauses_normal",
+    # "special_clauses_illegal",
+    # "special_clauses_normal",
 }
 _ARTICLE_RE = re.compile(r"제\s*(\d+)\s*조(?:\s*의\s*(\d+))?")
 _CASE_RE = re.compile(r"\d{4}[가-힣]{1,4}\d+")

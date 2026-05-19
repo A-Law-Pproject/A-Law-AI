@@ -598,14 +598,15 @@ def detect_risk(
     """
     # 쿼리 벡터 1회 계산 후 3개 컬렉션에 재사용
     query_vector = embeddings.embed_query(user_clause)
-    illegal_results = search_collection(
-        client, embeddings, user_clause, "special_clauses_illegal", k=3,
-        query_vector=query_vector,
-    )
-    normal_results = search_collection(
-        client, embeddings, user_clause, "special_clauses_normal", k=2,
-        query_vector=query_vector,
-    )
+    # illegal_results = search_collection(
+    #     client, embeddings, user_clause, "special_clauses_illegal", k=3,
+    #     query_vector=query_vector,
+    # )
+    # normal_results = search_collection(
+    #     client, embeddings, user_clause, "special_clauses_normal", k=2,
+    #     query_vector=query_vector,
+    # )
+    illegal_results, normal_results = [], []
     law_statutes_filter = infer_law_statutes_filter(user_clause)
     law_results = []
     law_results.extend(
@@ -1168,15 +1169,8 @@ def _build_clause_risk_graph(
         )
         law_filter = infer_law_statutes_filter(law_query)
 
-        illegal_docs, normal_docs, law_db_docs, law_statute_docs = await asyncio.gather(
-            asyncio.to_thread(
-                search_collection, client, embeddings, clause,
-                "special_clauses_illegal", 4, None, 0.0, query_vector,
-            ),
-            asyncio.to_thread(
-                search_collection, client, embeddings, clause,
-                "special_clauses_normal", 3, None, 0.0, query_vector,
-            ),
+        illegal_docs, normal_docs = [], []  # special_clauses 비활성화
+        law_db_docs, law_statute_docs = await asyncio.gather(
             asyncio.to_thread(
                 search_collection, client, embeddings, law_query,
                 "law_database", 4, None, 0.10, law_vector,
@@ -1323,9 +1317,8 @@ async def _detect_risk_legacy(
     query_vector = await asyncio.to_thread(embeddings.embed_query, search_query)
 
     law_statutes_filter = infer_law_statutes_filter(search_query)
-    (illegal_results, normal_results, law_db_results, law_statutes_results) = await asyncio.gather(
-        asyncio.to_thread(search_collection, client, embeddings, search_query, "special_clauses_illegal", 5, None, 0.0, query_vector),
-        asyncio.to_thread(search_collection, client, embeddings, search_query, "special_clauses_normal", 3, None, 0.0, query_vector),
+    illegal_results, normal_results = [], []  # special_clauses 비활성화
+    (law_db_results, law_statutes_results) = await asyncio.gather(
         asyncio.to_thread(search_collection, client, embeddings, search_query, "law_database", 3, None, 0.0, query_vector),
         asyncio.to_thread(search_collection, client, embeddings, search_query, "law_statutes", 3, law_statutes_filter, 0.0, query_vector),
     )
@@ -1465,8 +1458,8 @@ _CHAT_COLLECTIONS = [
     "law_database",
     "law_statutes",
     "contracts",
-    "special_clauses_illegal",
-    "special_clauses_normal",
+    # "special_clauses_illegal",
+    # "special_clauses_normal",
 ]
 
 # 챗봇에서 법령 관련 컬렉션 우선 검색 수 (법률 근거 답변 강화)
@@ -1474,8 +1467,8 @@ _CHAT_K_PER_COLLECTION: dict[str, int] = {
     "law_database": 4,           # 법률 조문·판례 — 법적 근거의 핵심 소스
     "law_statutes": 4,           # 각종 법령 원문 — 조문 번호 직접 인용 소스
     "contracts": 2,              # 표준 계약서 템플릿
-    "special_clauses_illegal": 3,  # 독소조항 사례
-    "special_clauses_normal": 2,   # 정상조항 사례
+    # "special_clauses_illegal": 3,  # 독소조항 사례
+    # "special_clauses_normal": 2,   # 정상조항 사례
 }
 
 # 임대차 관련 키워드 — 해당 키워드가 포함된 질의는 법령 검색 수 증가
@@ -1616,8 +1609,8 @@ async def chat_rag(
     _score_threshold = {
         "law_database": 0.15,
         "law_statutes": 0.15,
-        "special_clauses_illegal": 0.45,
-        "special_clauses_normal": 0.4,
+        # "special_clauses_illegal": 0.45,
+        # "special_clauses_normal": 0.4,
         "default": 0.25,
     }
     _search_kwargs = dict(

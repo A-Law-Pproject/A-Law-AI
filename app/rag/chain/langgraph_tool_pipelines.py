@@ -93,8 +93,8 @@ _SOURCE_COLLECTION_LABELS = {
     "law_database": "판례·해설",
     "law_statutes": "법령",
     "contracts": "계약서 예시",
-    "special_clauses_illegal": "독소조항 사례",
-    "special_clauses_normal": "일반조항 사례",
+    # "special_clauses_illegal": "독소조항 사례",
+    # "special_clauses_normal": "일반조항 사례",
 }
 
 
@@ -874,37 +874,19 @@ def _build_chat_graph(
         if law_filter:
             cf["law_statutes"] = law_filter
 
-        clause_docs, law_docs = await asyncio.gather(
-            _search_docs(
-                client,
-                embeddings,
-                question,
-                collections=["special_clauses_illegal", "special_clauses_normal"],
-                k_per_collection=4,
-                score_threshold={
-                    "special_clauses_illegal": 0.35,
-                    "special_clauses_normal": 0.30,
-                    "default": 0.30,
-                },
-                rerank_top_n=4,
-                collection_filters=None,
-                use_hyde=use_hyde,
-                use_multiquery=use_multiquery,
-                llm=llm if (use_hyde or use_multiquery) else None,
-            ),
-            _search_docs(
-                client,
-                embeddings,
-                question,
-                collections=["law_database", "law_statutes"],
-                k_per_collection=4,
-                score_threshold={"law_database": 0.12, "law_statutes": 0.12, "default": 0.12},
-                rerank_top_n=4,
-                collection_filters=cf or None,
-                use_hyde=use_hyde,
-                use_multiquery=use_multiquery,
-                llm=llm if (use_hyde or use_multiquery) else None,
-            ),
+        clause_docs = []
+        law_docs = await _search_docs(
+            client,
+            embeddings,
+            question,
+            collections=["law_database", "law_statutes"],
+            k_per_collection=4,
+            score_threshold={"law_database": 0.12, "law_statutes": 0.12, "default": 0.12},
+            rerank_top_n=4,
+            collection_filters=cf or None,
+            use_hyde=use_hyde,
+            use_multiquery=use_multiquery,
+            llm=llm if (use_hyde or use_multiquery) else None,
         )
         logger.debug(
             "[ChatGraph:clause_retrieve] clause_docs={} law_docs={}",
@@ -982,8 +964,8 @@ def _build_chat_graph(
             docs = await _retrieve_bucket(
                 "contract_search",
                 query,
-                search_collections=[collection for collection in collections if collection in {"contracts", "special_clauses_illegal", "special_clauses_normal"}],
-                score_threshold={"contracts": 0.25, "special_clauses_illegal": 0.4, "special_clauses_normal": 0.35, "default": 0.3},
+                search_collections=[collection for collection in collections if collection in {"contracts"}],
+                score_threshold={"contracts": 0.25, "default": 0.3},
                 rerank_top_n=4,
             )
             return json.dumps(
@@ -1424,9 +1406,8 @@ async def _retrieve_clause_evidence_bundle(
     law_vector = query_vector if law_query == clause_text else await asyncio.to_thread(embeddings.embed_query, law_query)
     law_filter = infer_law_statutes_filter(law_query)
 
-    illegal_docs, normal_docs, law_db_docs, law_statute_docs = await asyncio.gather(
-        asyncio.to_thread(search_collection, client, embeddings, clause_text, "special_clauses_illegal", 4, None, 0.0, query_vector),
-        asyncio.to_thread(search_collection, client, embeddings, clause_text, "special_clauses_normal", 3, None, 0.0, query_vector),
+    illegal_docs, normal_docs = [], []
+    law_db_docs, law_statute_docs = await asyncio.gather(
         asyncio.to_thread(search_collection, client, embeddings, law_query, "law_database", 4, None, 0.1, law_vector),
         asyncio.to_thread(search_collection, client, embeddings, law_query, "law_statutes", 5, law_filter, 0.1, law_vector),
     )

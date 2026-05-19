@@ -98,15 +98,12 @@ async def run_ocr_from_s3(
         )
         result = _apply_text_masking_to_result(result)
 
-        try:
-            await save_ocr_result(request.s3_key, result, image_url=request.image_url)
-        except Exception as exc:
-            logger.warning(f"Failed to save OCR result to MongoDB: {exc}")
-
+        # 마스킹 완료 후 최종 image_url 결정 (마스킹 URL이 있으면 그걸 사용)
+        effective_image_url = request.image_url
         if settings.ENABLE_MASKING:
             try:
                 words_dicts = [word.model_dump() for word in result.words] if result.words else None
-                await mask_and_store(
+                masking_result = await mask_and_store(
                     original_text=result.full_text or result.markdown or "",
                     original_image_bytes=original_image_bytes,
                     s3_key=request.s3_key,
@@ -117,8 +114,22 @@ async def run_ocr_from_s3(
                     pre_mask_count=pre_mask_result.mask_count,
                     pre_mask_types=pre_mask_result.mask_types,
                 )
+                if masking_result.masked_s3_key:
+                    result.masked_image_url = (
+                        f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com"
+                        f"/{masking_result.masked_s3_key}"
+                    )
+                    effective_image_url = result.masked_image_url
+                    # 마스킹된 버전으로 교체됐으므로 원본 삭제
+                    await asyncio.to_thread(s3_client.delete_file, request.s3_key)
             except Exception as exc:
                 logger.warning(f"Failed to persist masking artifacts after OCR: {type(exc).__name__}: {exc}")
+
+        # MongoDB 저장: 마스킹 후 최종 URL로 저장해야 Spring findByImageUrl 조회가 일치함
+        try:
+            await save_ocr_result(request.s3_key, result, image_url=effective_image_url)
+        except Exception as exc:
+            logger.warning(f"Failed to save OCR result to MongoDB: {exc}")
 
         if not include_overlay:
             result.words = None
