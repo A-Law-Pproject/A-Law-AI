@@ -15,7 +15,7 @@ ragas>=0.1.14
 # OpenAI
 openai>=1.50.0
 
-# Pydantic for validation
+# Pydantic
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 
@@ -25,25 +25,24 @@ opencv-python-headless>=4.8.0
 PyYAML>=6.0
 
 # Korean NLP & Embeddings
-# torch CPU-only는 Dockerfile에서 먼저 설치 (GPU 버전 방지)
 sentence-transformers>=2.3.0
 
-# Message Queue - RabbitMQ
 aio-pika>=9.4.0
 
-# Vector DB - Pinecone (배포 환경)
 pinecone>=3.0.0
 
-# Cache - Redis
 redis>=5.0.0
 
-# Database - MongoDB (async)
 motor>=3.3.0
 certifi>=2024.2.2
 
 # AWS S3
-boto3>=1.34.0
-aioboto3>=15.0.0
+boto3==1.34.162
+botocore==1.34.162
+s3transfer==0.10.2
+urllib3==2.2.2
+python-dateutil==2.9.0.post0
+jmespath==1.0.1
 
 # Utilities
 python-dotenv>=1.0.0

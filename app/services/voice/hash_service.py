@@ -5,7 +5,7 @@ import asyncio
 import hashlib
 from datetime import datetime, timezone
 
-import aioboto3
+import boto3
 from loguru import logger
 
 from app.core.config import settings
@@ -24,6 +24,38 @@ def build_s3_key(source_id: str, timestamp: str, file_hash: str, ext: str) -> st
     return f"audio/analysis/{source_id}/{safe_ts}_{hash_short}.{ext}"
 
 
+def _build_s3_client():
+    return boto3.client(
+        "s3",
+        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+        region_name=settings.AWS_REGION,
+    )
+
+
+def _upload_to_s3_sync(
+    file_bytes: bytes,
+    s3_key: str,
+    content_type: str,
+) -> None:
+    s3_client = _build_s3_client()
+    s3_client.put_object(
+        Bucket=settings.AWS_S3_BUCKET,
+        Key=s3_key,
+        Body=file_bytes,
+        ContentType=content_type,
+    )
+
+
+def _download_from_s3_sync(s3_key: str) -> bytes:
+    s3_client = _build_s3_client()
+    response = s3_client.get_object(
+        Bucket=settings.AWS_S3_BUCKET,
+        Key=s3_key,
+    )
+    return response["Body"].read()
+
+
 async def upload_to_s3(
     file_bytes: bytes,
     s3_key: str,
@@ -34,18 +66,7 @@ async def upload_to_s3(
         return False
 
     try:
-        session = aioboto3.Session(
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            region_name=settings.AWS_REGION,
-        )
-        async with session.client("s3") as s3_client:
-            await s3_client.put_object(
-                Bucket=settings.AWS_S3_BUCKET,
-                Key=s3_key,
-                Body=file_bytes,
-                ContentType=content_type,
-            )
+        await asyncio.to_thread(_upload_to_s3_sync, file_bytes, s3_key, content_type)
         logger.info(f"S3 upload completed: s3://{settings.AWS_S3_BUCKET}/{s3_key}")
         return True
     except Exception as e:
@@ -58,17 +79,7 @@ async def download_from_s3(s3_key: str) -> bytes:
         raise RuntimeError("AWS credentials are not configured for S3 download")
 
     try:
-        session = aioboto3.Session(
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            region_name=settings.AWS_REGION,
-        )
-        async with session.client("s3") as s3_client:
-            response = await s3_client.get_object(
-                Bucket=settings.AWS_S3_BUCKET,
-                Key=s3_key,
-            )
-            file_bytes = await response["Body"].read()
+        file_bytes = await asyncio.to_thread(_download_from_s3_sync, s3_key)
         logger.info(
             f"S3 download completed: s3://{settings.AWS_S3_BUCKET}/{s3_key} ({len(file_bytes)} bytes)"
         )
