@@ -75,6 +75,9 @@ class ContractOCRResponse(BaseModel):
     # 오버레이 데이터 - 단어별 정확한 좌표 (Upstage Document OCR)
     words: Optional[List[OCRWord]] = None
 
+    # 마스킹된 이미지 S3 URL (ENABLE_MASKING=true 시 원본 대체)
+    masked_image_url: Optional[str] = None
+
     # 경고/에러
     warnings: List[str] = Field(default_factory=list)
     error: Optional[str] = None

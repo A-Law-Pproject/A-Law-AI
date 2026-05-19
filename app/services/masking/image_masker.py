@@ -30,9 +30,12 @@ _IDENTITY_EXTRA_RIGHT_RATIO = 0.12
 _RESIDENT_LABEL = r"주\s*민\s*(?:등\s*록\s*)?번\s*호"
 _PHONE_LABEL = r"(?:휴\s*대\s*전\s*화|전\s*화|연\s*락\s*처)"
 _ADDRESS_LABEL = r"(?:주\s*소|소\s*재\s*지|재\s*지)"
-_IDENTITY_LABEL = r"(?:성\s*명|대\s*표|서\s*명|서\s*명\s*인|인\s*감|도\s*장)"
+_IDENTITY_LABEL = r"(?:성\s*명|임\s*대\s*인|임\s*차\s*인|대\s*리\s*인|대\s*표|서\s*명|서\s*명\s*인|인\s*감|도\s*장)"
+_EMAIL_LABEL = r"(?:이\s*메\s*일|e[-\s]?mail)"
+_BUSINESS_NO_LABEL = r"사\s*업\s*자\s*(?:등\s*록\s*)?번\s*호"
 _STOP_LABEL = (
     rf"(?:{_RESIDENT_LABEL}|{_PHONE_LABEL}|{_ADDRESS_LABEL}|{_IDENTITY_LABEL}|"
+    rf"{_EMAIL_LABEL}|{_BUSINESS_NO_LABEL}|"
     r"등\s*록\s*번\s*호|상\s*호|소\s*속\s*공\s*인\s*중\s*개\s*사)"
 )
 
@@ -52,9 +55,22 @@ _IDENTITY_FIELD_PATTERN = re.compile(
     rf"(?P<label>{_IDENTITY_LABEL})\s*[:：]?\s*(?P<value>.+?)"
     rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)"
 )
+_LABELLED_EMAIL_PATTERN = re.compile(
+    rf"(?P<label>{_EMAIL_LABEL})\s*[:：]?\s*(?P<value>.+?)"
+    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)",
+    re.IGNORECASE,
+)
+_LABELLED_BUSINESS_NO_PATTERN = re.compile(
+    rf"(?P<label>{_BUSINESS_NO_LABEL})\s*[:：]?\s*(?P<value>.+?)"
+    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)"
+)
 
-_PHONE_VALUE_PATTERN = re.compile(r"\b01[016789]\s*[- ]?\s*\d{3,4}\s*[- ]?\s*\d{4}\b")
+_PHONE_VALUE_PATTERN = re.compile(
+    r"\b0(?:1[016789]|2|[3-9][0-9]?)\s*[- ]?\s*\d{3,4}\s*[- ]?\s*\d{4}\b"
+)
 _RESIDENT_VALUE_PATTERN = re.compile(r"\b\d{6}\s*[- ]?\s*[1-8]\d{6}\b")
+_EMAIL_VALUE_PATTERN = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", re.IGNORECASE)
+_BUSINESS_NO_VALUE_PATTERN = re.compile(r"\b\d{3}\s*[-]?\s*\d{2}\s*[-]?\s*\d{5}\b")
 
 _SEAL_KEYWORDS = ("인감", "서명", "도장", "대표", "성명", "인")
 
@@ -555,6 +571,46 @@ def find_sensitive_regions_from_words(
             extra_vertical_px=10,
         )
     )
+    regions.extend(
+        _collect_pattern_regions(
+            lines,
+            _LABELLED_EMAIL_PATTERN,
+            region_type="email",
+            group_name="value",
+            img_width=img_width,
+            img_height=img_height,
+        )
+    )
+    regions.extend(
+        _collect_pattern_regions(
+            lines,
+            _EMAIL_VALUE_PATTERN,
+            region_type="email",
+            group_name=None,
+            img_width=img_width,
+            img_height=img_height,
+        )
+    )
+    regions.extend(
+        _collect_pattern_regions(
+            lines,
+            _LABELLED_BUSINESS_NO_PATTERN,
+            region_type="business_no",
+            group_name="value",
+            img_width=img_width,
+            img_height=img_height,
+        )
+    )
+    regions.extend(
+        _collect_pattern_regions(
+            lines,
+            _BUSINESS_NO_VALUE_PATTERN,
+            region_type="business_no",
+            group_name=None,
+            img_width=img_width,
+            img_height=img_height,
+        )
+    )
 
     for word in words:
         text = str(word.get("text", "")).strip()
@@ -570,28 +626,27 @@ def find_sensitive_regions_from_words(
 
 
 def mask_image_regions(image_bytes: bytes, mask_regions: List[Box]) -> bytes:
-    try:
-        from PIL import Image, ImageDraw
-    except ImportError as exc:
-        raise RuntimeError("Pillow is required for image masking") from exc
-
     if not mask_regions:
         return image_bytes
 
-    try:
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    except Exception as exc:
-        raise ValueError(f"Failed to decode image for masking: {exc}") from exc
+    image = _decode_image(image_bytes)
 
-    draw = ImageDraw.Draw(image)
     for left, top, right, bottom in mask_regions:
-        if right > left and bottom > top:
-            draw.rectangle([left, top, right, bottom], fill=(0, 0, 0))
+        if right <= left or bottom <= top:
+            continue
+        roi = image[top:bottom, left:right]
+        roi_h, roi_w = roi.shape[:2]
+        if roi_h < 1 or roi_w < 1:
+            continue
+        # 박스 크기에 비례한 커널 (홀수, 최소 51)
+        k = max(51, (min(roi_w, roi_h) // 2) | 1)
+        blurred = cv2.GaussianBlur(roi, (k, k), 0)
+        image[top:bottom, left:right] = blurred
 
-    output = io.BytesIO()
-    image.save(output, format="JPEG", quality=95)
-    output.seek(0)
-    return output.read()
+    ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if not ok:
+        raise ValueError("Failed to encode blurred image")
+    return encoded.tobytes()
 
 
 def mask_image_with_words(
