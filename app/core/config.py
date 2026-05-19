@@ -35,16 +35,19 @@ class Settings(BaseSettings):
     HYBRID_RRF_K: int = 60
     HYBRID_DENSE_CANDIDATE_MULTIPLIER: int = 4
     HYBRID_LEXICAL_CANDIDATE_MULTIPLIER: int = 3
+    # 코퍼스 전체 BM25 (dense가 놓친 문서를 lexical로 직접 회수)
+    ENABLE_CORPUS_BM25: bool = True
+    BM25_CORPUS_DIR: str = "data/bm25_corpus"
+    HYBRID_CORPUS_BM25_MULTIPLIER: int = 6
 
     # Legal Documents Path
     LEGAL_DOCS_PATH: str = "data/raw"
 
-    # Live law API + MCP bridge
+    # Live law API
     LAW_API_OC: str = ""
     LAW_API_BASE_URL: str = "https://www.law.go.kr/DRF"
     LAW_API_TIMEOUT_SECONDS: float = 15.0
-    LAW_MCP_ENABLED: bool = True
-    LAW_MCP_MAX_RESULTS: int = 3
+    LAW_API_MAX_RESULTS: int = 3
     
     # MongoDB (OCR 결과 저장소 - Atlas)
     MONGODB_URI: str = "mongodb+srv://mongoadmin:alaw@cluster0.t0cklix.mongodb.net/?appName=Cluster0"

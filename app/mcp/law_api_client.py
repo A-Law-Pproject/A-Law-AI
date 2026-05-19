@@ -187,7 +187,7 @@ class LawApiClient:
                 "target": "law",
                 "query": query,
                 "search": search,
-                "display": display or settings.LAW_MCP_MAX_RESULTS,
+                "display": display or settings.LAW_API_MAX_RESULTS,
                 "page": 1,
             },
         )
@@ -221,8 +221,8 @@ class LawApiClient:
             "query": query,
             "article": requested_article,
             "law": best_match,
-            "results": items[: settings.LAW_MCP_MAX_RESULTS],
-            "snippets": snippets[: settings.LAW_MCP_MAX_RESULTS],
+            "results": items[: settings.LAW_API_MAX_RESULTS],
+            "snippets": snippets[: settings.LAW_API_MAX_RESULTS],
         }
 
     async def search_precedents(self, query: str, *, display: int | None = None, search: int = 2) -> list[dict[str, str]]:
@@ -232,7 +232,7 @@ class LawApiClient:
                 "target": "prec",
                 "query": query,
                 "search": search,
-                "display": display or settings.LAW_MCP_MAX_RESULTS,
+                "display": display or settings.LAW_API_MAX_RESULTS,
                 "page": 1,
             },
         )
@@ -261,7 +261,6 @@ class LawApiClient:
         return {
             "query": query,
             "best_match": best_match,
-            "results": items[: settings.LAW_MCP_MAX_RESULTS],
+            "results": items[: settings.LAW_API_MAX_RESULTS],
             "detail": detail,
         }
-

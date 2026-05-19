@@ -1,2 +1,1 @@
-"""MCP helpers for live law and precedent lookup."""
-
+"""Live law API helpers."""

@@ -268,6 +268,39 @@ def _should_use_hybrid_search(collection_name: str, query: str) -> bool:
     )
 
 
+def _matches_filter(meta: dict, filter_dict: dict | None) -> bool:
+    """Pinecone 메타데이터 필터를 Python에서 검사.
+
+    infer_law_statutes_filter / build_multi_law_filter / _merge_filter_dict가
+    생성하는 구조($and, $or, {key: value} 동등비교)만 지원한다. 코퍼스 BM25가
+    dense와 동일한 후보 범위를 유지하도록 해 원래 버그(엉뚱한 법령 회수) 재발을 막는다.
+    알 수 없는 연산자는 통과(True) 처리해 과도한 배제를 피한다.
+    """
+    if not filter_dict:
+        return True
+    for key, value in filter_dict.items():
+        if key == "$and":
+            if not all(_matches_filter(meta, sub) for sub in value):
+                return False
+        elif key == "$or":
+            if not any(_matches_filter(meta, sub) for sub in value):
+                return False
+        elif key.startswith("$"):
+            continue  # 미지원 연산자는 통과
+        else:
+            mv = meta.get(key)
+            if isinstance(value, dict):
+                if "$eq" in value and mv != value["$eq"]:
+                    return False
+                if "$ne" in value and mv == value["$ne"]:
+                    return False
+                if "$in" in value and mv not in value["$in"]:
+                    return False
+            elif mv != value:
+                return False
+    return True
+
+
 _LAW_NAME_KEYWORDS = {
     # 주택 임대차 관련 (가장 우선 매칭 — 길이 내림차순 정렬로 인해 긴 이름이 먼저 매칭됨)
     "주택임대차계약증서의 확정일자 부여 및 정보제공에 관한 규칙": "주택임대차계약증서의 확정일자 부여 및 정보제공에 관한 규칙",
@@ -435,24 +468,43 @@ def search_collection(
     )
     dense_results.sort(key=lambda doc: doc.metadata.get("score", 0.0), reverse=True)
 
-    if not _should_use_hybrid_search(collection_name, query) or len(dense_results) <= 1:
+    if not _should_use_hybrid_search(collection_name, query):
         return dense_results[:k]
 
-    lexical_k = max(k, k * settings.HYBRID_LEXICAL_CANDIDATE_MULTIPLIER)
-    lexical_results = _bm25_rank_candidates(
-        query,
-        dense_results,
-        collection_name,
-        min(lexical_k, len(dense_results)),
-    )
-    if not lexical_results:
+    ranked_lists: dict[str, list[Document]] = {}
+    if dense_results:
+        ranked_lists["dense"] = dense_results
+
+    # dense 후보 풀 내부 재정렬 BM25 (기존 동작)
+    if len(dense_results) > 1:
+        lexical_k = max(k, k * settings.HYBRID_LEXICAL_CANDIDATE_MULTIPLIER)
+        lexical_results = _bm25_rank_candidates(
+            query,
+            dense_results,
+            collection_name,
+            min(lexical_k, len(dense_results)),
+        )
+        if lexical_results:
+            ranked_lists["bm25"] = lexical_results
+
+    # 코퍼스 전체 BM25 — dense가 놓친 문서를 직접 회수 (아티팩트 없으면 [] → 무회귀)
+    from app.rag.retriever.bm25_index import corpus_bm25_search
+
+    corpus_k = max(k, k * settings.HYBRID_CORPUS_BM25_MULTIPLIER)
+    corpus_results = corpus_bm25_search(query, collection_name, corpus_k)
+    if corpus_results and filter_dict:
+        corpus_results = [
+            doc for doc in corpus_results if _matches_filter(doc.metadata, filter_dict)
+        ]
+    if corpus_results:
+        ranked_lists["corpus_bm25"] = corpus_results
+
+    # 융합할 lexical 신호가 전혀 없으면 기존 dense 동작 유지 (무회귀)
+    if set(ranked_lists) <= {"dense"}:
         return dense_results[:k]
 
     fused_results = _rrf_fuse_documents(
-        {
-            "dense": dense_results,
-            "bm25": lexical_results,
-        },
+        ranked_lists,
         final_k=k,
         rrf_k=settings.HYBRID_RRF_K,
     )

@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from loguru import logger
 
-from app.core.dependencies import get_law_mcp_bridge, get_redis_client
+from app.core.dependencies import get_law_api_client, get_redis_client
 from app.monitoring.llmops_metrics import observe_rag_interaction
 from app.monitoring.metrics import (
     LLM_LATENCY,
@@ -895,7 +895,7 @@ def _build_chat_graph(
         contract_context = state.get("contract_context") or ""
         use_hyde = bool(state.get("use_hyde"))
         use_multiquery = bool(state.get("use_multiquery"))
-        law_bridge = get_law_mcp_bridge()
+        law_api_client = get_law_api_client()
 
         async def _retrieve_bucket(
             bucket: str,
@@ -1072,7 +1072,7 @@ def _build_chat_graph(
         @tool
         async def lookup_live_statute(query: str, article: str = "") -> str:
             """실시간 법령 API에서 최신 법령과 정확한 조문 내용을 조회합니다."""
-            payload = await law_bridge.lookup_current_statute(query, article=article)
+            payload = await law_api_client.lookup_current_statute(query, article=article)
             docs = _live_statute_docs_from_payload(payload)
             if docs:
                 evidence_store["live_statute"].extend(docs)
@@ -1091,7 +1091,7 @@ def _build_chat_graph(
         @tool
         async def lookup_live_precedent(query: str) -> str:
             """실시간 판례 API에서 사건번호·최신 판례 요지를 조회합니다."""
-            payload = await law_bridge.lookup_precedent(query)
+            payload = await law_api_client.lookup_precedent(query)
             docs = _live_precedent_docs_from_payload(payload)
             if docs:
                 evidence_store["live_precedent"].extend(docs)
