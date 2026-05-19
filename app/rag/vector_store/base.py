@@ -19,6 +19,7 @@ class VectorDB(Protocol):
         k: int = 4,
         filter_dict: dict | None = None,
         score_threshold: float = 0.0,
+        sparse_vector: dict | None = None,
     ) -> list[Document]:
         """
         Args:

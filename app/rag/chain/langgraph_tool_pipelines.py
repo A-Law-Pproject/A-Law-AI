@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from loguru import logger
 
-from app.core.dependencies import get_redis_client
+from app.core.dependencies import get_law_mcp_bridge, get_redis_client
 from app.monitoring.llmops_metrics import observe_rag_interaction
 from app.monitoring.metrics import (
     LLM_LATENCY,
@@ -86,10 +86,24 @@ def _sort_docs(docs: list[Document]) -> list[Document]:
     )
 
 
+_SOURCE_COLLECTION_LABELS = {
+    "law_database": "판례·해설",
+    "law_statutes": "법령",
+    "contracts": "계약서 예시",
+    "special_clauses_illegal": "독소조항 사례",
+    "special_clauses_normal": "일반조항 사례",
+}
+
+
+def _display_source_collection(collection: str) -> str:
+    return _SOURCE_COLLECTION_LABELS.get(collection, "참고문서")
+
+
 def _format_sources(docs: list[Document], limit: int = 3) -> list[str]:
     sources: list[str] = []
     for doc in docs[:limit]:
         meta = doc.metadata
+        coll = meta.get("collection", "")
         parts = [
             part
             for part in [
@@ -98,8 +112,16 @@ def _format_sources(docs: list[Document], limit: int = 3) -> list[str]:
             ]
             if part
         ]
-        coll = meta.get("collection", "")
-        sources.append(f"[{coll}] {' '.join(parts)}".strip(" []"))
+        collection_label = _display_source_collection(coll)
+        label = f"[{collection_label}] {' '.join(parts)}" if parts else f"[{collection_label}]"
+
+        # law_statutes / law_database: 조항 핵심 내용 첫 문장 추가
+        if coll in ("law_statutes", "law_database") and doc.page_content:
+            snippet = doc.page_content.split("\n")[0].strip()[:100]
+            if snippet:
+                label += f" — {snippet}"
+
+        sources.append(label)
     return sources
 
 
@@ -112,6 +134,118 @@ def _compact_history(history: list[dict], limit: int = 6) -> str:
             continue
         lines.append(f"{role}: {content[:280]}")
     return "\n".join(lines) if lines else "(이전 대화 없음)"
+
+
+def _live_statute_docs_from_payload(payload: dict[str, Any]) -> list[Document]:
+    law = payload.get("law") or {}
+    law_name = str(law.get("law_name") or "").strip()
+    source_url = str(law.get("source_url") or "").strip()
+
+    docs: list[Document] = []
+    for snippet in payload.get("snippets") or []:
+        content = "\n".join(
+            part
+            for part in [
+                snippet.get("article"),
+                snippet.get("title"),
+                snippet.get("content"),
+            ]
+            if part
+        ).strip()
+        if not content:
+            continue
+        docs.append(
+            Document(
+                page_content=content,
+                metadata={
+                    "collection": "law_mcp",
+                    "law_name": law_name,
+                    "article": str(snippet.get("article") or "").strip(),
+                    "title": str(snippet.get("title") or "").strip(),
+                    "source_url": source_url,
+                    "source_type": "live_statute",
+                },
+            )
+        )
+
+    if docs:
+        return docs
+
+    for item in payload.get("results") or []:
+        title = str(item.get("law_name") or "").strip()
+        content = " ".join(
+            part
+            for part in [
+                item.get("promulgation_date"),
+                item.get("effective_date"),
+                item.get("department"),
+            ]
+            if part
+        ).strip()
+        if not title:
+            continue
+        docs.append(
+            Document(
+                page_content=f"{title}\n{content}".strip(),
+                metadata={
+                    "collection": "law_mcp",
+                    "law_name": title,
+                    "source_url": str(item.get("source_url") or "").strip(),
+                    "source_type": "live_statute",
+                },
+            )
+        )
+    return docs
+
+
+def _live_precedent_docs_from_payload(payload: dict[str, Any]) -> list[Document]:
+    best_match = payload.get("best_match") or {}
+    detail = payload.get("detail") or {}
+
+    docs: list[Document] = []
+    content_parts = [
+        best_match.get("case_name"),
+        best_match.get("summary"),
+    ]
+
+    for key in ("판시사항", "판결요지", "판례내용", "참조조문", "참조판례"):
+        value = detail.get(key)
+        if value:
+            content_parts.append(f"{key}: {value}")
+
+    content = "\n".join(str(part).strip() for part in content_parts if str(part).strip()).strip()
+    if content:
+        docs.append(
+            Document(
+                page_content=content,
+                metadata={
+                    "collection": "precedent_mcp",
+                    "title": str(best_match.get("case_name") or "").strip(),
+                    "case_no": str(best_match.get("case_no") or "").strip(),
+                    "source_url": str(best_match.get("source_url") or "").strip(),
+                    "source_type": "live_precedent",
+                },
+            )
+        )
+
+    for item in payload.get("results") or []:
+        title = str(item.get("case_name") or "").strip()
+        if not title:
+            continue
+        summary = str(item.get("summary") or "").strip()
+        docs.append(
+            Document(
+                page_content="\n".join(part for part in [title, summary] if part).strip(),
+                metadata={
+                    "collection": "precedent_mcp",
+                    "title": title,
+                    "case_no": str(item.get("case_no") or "").strip(),
+                    "source_url": str(item.get("source_url") or "").strip(),
+                    "source_type": "live_precedent",
+                },
+            )
+        )
+    return _sort_docs(docs)
 
 
 def _extract_relevant_contract_snippets(contract_context: str, query: str, limit: int = 4) -> list[str]:
@@ -524,7 +658,9 @@ def _build_chat_context(state: ChatGraphState) -> tuple[str, list[Document]]:
 
     label_map = {
         "statute": "법령/조문",
+        "live_statute": "실시간 법령 API",
         "precedent": "판례/법리",
+        "live_precedent": "실시간 판례 API",
         "procedure": "실무 절차",
         "contract_search": "계약 예시",
     }
@@ -547,6 +683,74 @@ def _build_chat_fallback_answer(question: str, context: str, sources: list[str])
     )
 
 
+def _is_scope_rejection_answer(answer: str) -> bool:
+    return "임대차 계약 관련 질문만 답변할 수 있습니다" in (answer or "")
+
+
+def _build_in_scope_guardrail_fallback(question: str, sources: list[str]) -> str:
+    source_line = f"\n\n참고 출처: {', '.join(sources[:2])}" if sources else ""
+    if "보증금" in question:
+        guidance = (
+            "보증금은 계약서에 정한 지급 시기가 있으면 그 약정이 우선하고, "
+            "약정이 불명확하면 계약금·잔금·입주일 약정을 함께 확인하시는 것이 좋습니다."
+        )
+    else:
+        guidance = (
+            "구체 판단을 위해서는 계약서의 관련 조항, 핵심 일정, 특약 내용을 함께 확인하시는 것이 좋습니다."
+        )
+    return (
+        "질문하신 내용은 임대차 범위 안에 있습니다. "
+        f"현재 자동 응답이 범위 밖 질문으로 잘못 처리되었습니다. {guidance}"
+        f"{source_line}"
+    )
+
+
+async def _repair_in_scope_rejection(
+    *,
+    question: str,
+    answer: str,
+    history: list[dict],
+    context: str,
+    docs: list[Document],
+    llm: ChatOpenAI,
+    deadline: float,
+) -> str:
+    if not (_is_lease_related(question) and _is_scope_rejection_answer(answer)):
+        return answer
+
+    if _remaining_seconds(deadline) < 1.0:
+        return _build_in_scope_guardrail_fallback(question, _format_sources(docs))
+
+    history_messages = []
+    for msg in history[-10:]:
+        if msg.get("role") == "user":
+            history_messages.append(HumanMessage(content=msg["content"]))
+        elif msg.get("role") == "assistant":
+            history_messages.append(AIMessage(content=msg["content"]))
+
+    prompt_messages = CHAT_PROMPT.format_messages(
+        context=context,
+        history=history_messages,
+        question=question,
+    )
+    repair_messages = [
+        SystemMessage(
+            content=(
+                "이 질문은 임대차 범위 안에 있습니다. "
+                "범위 밖 질문 거절 문구를 쓰지 말고, 참고 문서에 근거한 실질 답변을 작성하세요. "
+                "근거가 부족하면 부족하다고 밝히되 일반 원칙과 확인 포인트는 반드시 안내하세요."
+            )
+        ),
+        *prompt_messages,
+    ]
+    with LLM_LATENCY.time():
+        repaired = await llm.ainvoke(repair_messages)
+    repaired_answer = repaired.content
+    if _is_scope_rejection_answer(repaired_answer):
+        return _build_in_scope_guardrail_fallback(question, _format_sources(docs))
+    return repaired_answer
+
+
 def _should_force_caution(answer: str, evidence: dict[str, list[Document]]) -> bool:
     strong_patterns = (
         "즉시 퇴거해야",
@@ -556,8 +760,8 @@ def _should_force_caution(answer: str, evidence: dict[str, list[Document]]) -> b
     )
     if not any(pattern in answer for pattern in strong_patterns):
         return False
-    has_statute = bool(evidence.get("statute"))
-    has_precedent = bool(evidence.get("precedent"))
+    has_statute = bool(evidence.get("statute") or evidence.get("live_statute"))
+    has_precedent = bool(evidence.get("precedent") or evidence.get("live_precedent"))
     return not (has_statute and has_precedent)
 
 
@@ -599,8 +803,9 @@ def _build_chat_graph(
     async def term_retrieve_node(state: ChatGraphState) -> dict:
         """법령/조문 컬렉션만 검색하여 용어 설명에 필요한 근거를 수집한다."""
         question = state["question"]
-        use_hyde = bool(state.get("use_hyde"))
-        use_multiquery = bool(state.get("use_multiquery")) and _remaining_seconds(state["deadline"]) > 4.0
+        # 용어 설명 질의는 짧고 구체적 — HyDE/multiquery LLM 호출 불필요
+        use_hyde = False
+        use_multiquery = False
         cf: dict = {}
         law_filter = infer_law_statutes_filter(question)
         if law_filter:
@@ -626,8 +831,9 @@ def _build_chat_graph(
     async def clause_retrieve_node(state: ChatGraphState) -> dict:
         """독소조항·정상조항 + 법령을 병렬 검색하여 조항 위험도 판단 근거를 수집한다."""
         question = state["question"]
-        use_hyde = bool(state.get("use_hyde"))
-        use_multiquery = bool(state.get("use_multiquery")) and _remaining_seconds(state["deadline"]) > 4.0
+        # 조항 텍스트는 이미 구체적 — HyDE/multiquery LLM 호출 불필요
+        use_hyde = False
+        use_multiquery = False
         cf: dict = {}
         law_filter = infer_law_statutes_filter(question)
         if law_filter:
@@ -689,6 +895,7 @@ def _build_chat_graph(
         contract_context = state.get("contract_context") or ""
         use_hyde = bool(state.get("use_hyde"))
         use_multiquery = bool(state.get("use_multiquery"))
+        law_bridge = get_law_mcp_bridge()
 
         async def _retrieve_bucket(
             bucket: str,
@@ -862,6 +1069,44 @@ def _build_chat_graph(
                 ensure_ascii=False,
             )
 
+        @tool
+        async def lookup_live_statute(query: str, article: str = "") -> str:
+            """실시간 법령 API에서 최신 법령과 정확한 조문 내용을 조회합니다."""
+            payload = await law_bridge.lookup_current_statute(query, article=article)
+            docs = _live_statute_docs_from_payload(payload)
+            if docs:
+                evidence_store["live_statute"].extend(docs)
+            law = payload.get("law") or {}
+            return json.dumps(
+                {
+                    "bucket": "live_statute",
+                    "law_name": law.get("law_name", ""),
+                    "article": payload.get("article", ""),
+                    "hits": len(docs),
+                    "summary": build_context(docs, max_length=900) if docs else "실시간 법령 결과 없음",
+                },
+                ensure_ascii=False,
+            )
+
+        @tool
+        async def lookup_live_precedent(query: str) -> str:
+            """실시간 판례 API에서 사건번호·최신 판례 요지를 조회합니다."""
+            payload = await law_bridge.lookup_precedent(query)
+            docs = _live_precedent_docs_from_payload(payload)
+            if docs:
+                evidence_store["live_precedent"].extend(docs)
+            best_match = payload.get("best_match") or {}
+            return json.dumps(
+                {
+                    "bucket": "live_precedent",
+                    "case_name": best_match.get("case_name", ""),
+                    "case_no": best_match.get("case_no", ""),
+                    "hits": len(docs),
+                    "summary": build_context(docs, max_length=900) if docs else "실시간 판례 결과 없음",
+                },
+                ensure_ascii=False,
+            )
+
         tools = [
             contract_context_lookup,
             retrieve_contract_basis,
@@ -869,6 +1114,8 @@ def _build_chat_graph(
             retrieve_supplementary_law,
             retrieve_precedent_basis,
             retrieve_procedure_basis,
+            lookup_live_statute,
+            lookup_live_precedent,
         ]
         tools_by_name = {tool_item.name: tool_item for tool_item in tools}
 
@@ -892,6 +1139,8 @@ def _build_chat_graph(
                 "- 현재 계약서 원문이 있으면 contract_context_lookup을 우선 고려하세요.\n"
                 "- retrieve_statute_basis로 주 법령을 찾은 뒤 민법/민사집행법이 추가로 필요하면 "
                 "retrieve_supplementary_law를 호출하세요.\n"
+                "- 조문 번호(예: 제3조), 사건번호, '최신/현재' 같은 최신성이 중요하면 "
+                "lookup_live_statute 또는 lookup_live_precedent를 우선 고려하세요.\n"
                 "- 시간 예산 때문에 같은 도구를 중복 호출하지 말고, 최대 3개 도구만 고르세요.\n"
                 "- 도구 호출이 꼭 필요 없으면 호출 없이 넘겨도 됩니다."
                 f"{procedure_hint}"
@@ -911,21 +1160,20 @@ def _build_chat_graph(
         messages = list(state.get("messages", []))
         messages.append(response)
 
-        tool_messages: list[ToolMessage] = []
         if response.tool_calls and state.get("tool_rounds", 0) < CHAT_MAX_TOOL_ROUNDS:
-            for tool_call in response.tool_calls:
+            async def _invoke_one(tool_call: dict) -> ToolMessage:
                 tool_name = tool_call["name"]
                 tool_args = tool_call.get("args", {})
                 try:
                     result = await tools_by_name[tool_name].ainvoke(tool_args)
                 except Exception as exc:
                     result = json.dumps({"error": str(exc), "tool": tool_name}, ensure_ascii=False)
-                tool_messages.append(
-                    ToolMessage(
-                        content=result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
-                        tool_call_id=tool_call["id"],
-                    )
+                return ToolMessage(
+                    content=result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
+                    tool_call_id=tool_call["id"],
                 )
+
+            tool_messages = list(await asyncio.gather(*[_invoke_one(tc) for tc in response.tool_calls]))
             messages.extend(tool_messages)
 
         return {
@@ -960,6 +1208,16 @@ def _build_chat_graph(
             with LLM_LATENCY.time():
                 response = await llm.ainvoke(prompt_messages)
             answer = response.content
+
+        answer = await _repair_in_scope_rejection(
+            question=state["question"],
+            answer=answer,
+            history=state.get("history", []),
+            context=context,
+            docs=docs,
+            llm=llm,
+            deadline=state["deadline"],
+        )
 
         verification_source = "\n".join(doc.page_content for doc in docs)
         answer = annotate_unverified_citations(answer, verification_source)

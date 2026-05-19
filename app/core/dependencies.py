@@ -18,6 +18,7 @@ _embeddings: KUREEmbeddings | None = None
 _llm: ChatOpenAI | None = None
 _mongo_client: AsyncIOMotorClient | None = None
 _redis_client: aioredis.Redis | None = None
+_law_mcp_bridge = None
 
 
 def get_vector_db() -> VectorDB:
@@ -77,6 +78,16 @@ async def get_redis_client() -> aioredis.Redis:
         )
         logger.info("Redis singleton initialized")
     return _redis_client
+
+
+def get_law_mcp_bridge():
+    global _law_mcp_bridge
+    if _law_mcp_bridge is None:
+        from app.mcp.bridge import LawMCPBridge
+
+        _law_mcp_bridge = LawMCPBridge()
+        logger.info("Law MCP bridge singleton initialized")
+    return _law_mcp_bridge
 
 
 def _extract_ocr_text(doc: dict | None, *, lookup: str) -> str:

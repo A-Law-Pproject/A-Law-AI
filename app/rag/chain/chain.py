@@ -1471,6 +1471,48 @@ _LEASE_RELATED_KEYWORDS = [
     "명도", "경매", "임차권", "주택임대차", "상가임대차", "계약해지",
 ]
 
+# 임대차와 무관한 OOS 키워드
+_OOS_RE_CHAT = re.compile(
+    r"(주식|펀드|채권|가상화폐|코인|비트코인|이더리움"
+    r"|부동산\s*매매|분양|재개발|재건축"
+    r"|양도소득세|증여세|종합부동산세|증여|상속세"
+    r"|형사(?:소송|처벌|고소|고발)|가족법|이혼|유언"
+    r"|교통\s*사고|자동차\s*사고|차량\s*사고|중앙선\s*침범|추돌\s*사고|교통법규"
+    r"|불법\s*행위|손해\s*배상(?!\s*청구.*임대)|과실\s*비율|인신\s*사고"
+    r"|의료\s*사고|의료\s*분쟁|의료\s*과실|의료\s*소송"
+    r"|노동\s*법|해고|임금\s*체불|근로\s*계약|퇴직금|산재"
+    r"|저작권|특허|상표|지식\s*재산"
+    r"|날씨|여행|요리|건강|의학|병원|게임|영화"
+    r"|코딩|프로그래밍|파이썬|자바|수학|과학|역사"
+    r"|정치|선거|종교|신앙|주가|환율)"
+)
+
+_OOS_RESOURCE_PATTERNS_CHAT: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"교통\s*사고|자동차\s*사고|차량\s*사고|중앙선|추돌|과실\s*비율|교통법규"),
+     "교통사고 관련 문의는 도로교통공단(1577-1120) 또는 손해보험협회(1566-8000)에 문의하세요."),
+    (re.compile(r"의료\s*사고|의료\s*분쟁|의료\s*과실|의료\s*소송"),
+     "의료분쟁은 한국의료분쟁조정중재원(1670-2545)에 문의하세요."),
+    (re.compile(r"노동\s*법|해고|임금\s*체불|근로\s*계약|퇴직금|산재"),
+     "노동 관련 분쟁은 고용노동부 상담센터(1350)에 문의하세요."),
+    (re.compile(r"이혼|가족법|상속|유언|친권"),
+     "가족·상속 분쟁은 대한가정법률복지상담원(02-6952-9555)에 문의하세요."),
+    (re.compile(r"형사|고소|고발|처벌|범죄"),
+     "형사 사건은 대한법률구조공단(132)에서 무료 법률 상담을 받으실 수 있습니다."),
+]
+_OOS_RESOURCE_DEFAULT_CHAT = "법률구조공단(132) 또는 대한변호사협회 법률상담(02-3476-6500)을 이용하시길 권장드립니다."
+
+_REJECTION_BASE_CHAT = (
+    "죄송합니다. 저는 임대차 계약 관련 질문만 답변할 수 있습니다.\n"
+    "전세·월세 계약, 보증금, 계약갱신, 독소조항 분석 등에 대해 질문해 주세요."
+)
+
+
+def _build_chat_rejection(message: str) -> str:
+    for pattern, resource in _OOS_RESOURCE_PATTERNS_CHAT:
+        if pattern.search(message):
+            return f"{_REJECTION_BASE_CHAT}\n\n관련 기관 안내: {resource}"
+    return f"{_REJECTION_BASE_CHAT}\n\n관련 기관 안내: {_OOS_RESOURCE_DEFAULT_CHAT}"
+
 
 def _is_lease_related(query: str) -> bool:
     """질의가 임대차 계약 관련인지 판별."""
@@ -1513,6 +1555,15 @@ async def chat_rag(
         {"answer": str, "sources": list[str], "context": str,
          "source_documents": list[Document]}
     """
+    # OOS 사전 필터 — LLM 호출 전 명확한 범위 외 질문 차단
+    if _OOS_RE_CHAT.search(message) and not _is_lease_related(message):
+        return {
+            "answer": _build_chat_rejection(message),
+            "sources": [],
+            "context": "",
+            "source_documents": [],
+        }
+
     if collections is None:
         collections = _CHAT_COLLECTIONS
 

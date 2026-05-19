@@ -7,9 +7,10 @@ from typing import Any
 from langchain_core.documents import Document
 from loguru import logger
 
+from app.core.config import settings
 
 SEARCH_CACHE_TTL_SECONDS = 600
-SEARCH_CACHE_NAMESPACE = "rag:search:v1"
+SEARCH_CACHE_NAMESPACE = "rag:search:v2"
 
 
 def _stable_payload(data: Any) -> str:
@@ -42,6 +43,12 @@ def build_search_cache_key(
             "rerank_top_n": rerank_top_n,
             "use_hyde": use_hyde,
             "use_multiquery": use_multiquery,
+            "hybrid_search": {
+                "enabled": settings.ENABLE_HYBRID_SEARCH,
+                "rrf_k": settings.HYBRID_RRF_K,
+                "dense_multiplier": settings.HYBRID_DENSE_CANDIDATE_MULTIPLIER,
+                "lexical_multiplier": settings.HYBRID_LEXICAL_CANDIDATE_MULTIPLIER,
+            },
         }
     )
     digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()

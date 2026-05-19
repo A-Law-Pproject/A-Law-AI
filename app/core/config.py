@@ -31,9 +31,20 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
     TOP_K_DOCUMENTS: int = 5
+    ENABLE_HYBRID_SEARCH: bool = True
+    HYBRID_RRF_K: int = 60
+    HYBRID_DENSE_CANDIDATE_MULTIPLIER: int = 4
+    HYBRID_LEXICAL_CANDIDATE_MULTIPLIER: int = 3
 
     # Legal Documents Path
     LEGAL_DOCS_PATH: str = "data/raw"
+
+    # Live law API + MCP bridge
+    LAW_API_OC: str = ""
+    LAW_API_BASE_URL: str = "https://www.law.go.kr/DRF"
+    LAW_API_TIMEOUT_SECONDS: float = 15.0
+    LAW_MCP_ENABLED: bool = True
+    LAW_MCP_MAX_RESULTS: int = 3
     
     # MongoDB (OCR 결과 저장소 - Atlas)
     MONGODB_URI: str = "mongodb+srv://mongoadmin:alaw@cluster0.t0cklix.mongodb.net/?appName=Cluster0"

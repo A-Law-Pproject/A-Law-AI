@@ -40,14 +40,19 @@ class PineconeAdapter:
         k: int = 4,
         filter_dict: dict | None = None,
         score_threshold: float = 0.0,
+        sparse_vector: dict | None = None,
     ) -> list[Document]:
-        response = self._index.query(
-            vector=query_vector,
-            top_k=k,
-            namespace=namespace,
-            include_metadata=True,
-            filter=filter_dict,
-        )
+        query_kwargs = {
+            "vector": query_vector,
+            "top_k": k,
+            "namespace": namespace,
+            "include_metadata": True,
+            "filter": filter_dict,
+        }
+        if sparse_vector:
+            query_kwargs["sparse_vector"] = sparse_vector
+
+        response = self._index.query(**query_kwargs)
 
         documents: list[Document] = []
         for match in response.matches:
@@ -57,6 +62,7 @@ class PineconeAdapter:
             raw_meta = match.metadata or {}
             content = raw_meta.pop("content", "")
             metadata = dict(raw_meta)
+            metadata["id"] = getattr(match, "id", metadata.get("id", ""))
             metadata["score"] = match.score
             metadata["collection"] = namespace
 

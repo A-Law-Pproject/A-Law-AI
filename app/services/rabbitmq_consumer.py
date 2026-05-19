@@ -76,6 +76,7 @@ class RabbitMQConsumer:
         try:
             self.connection = await aio_pika.connect_robust(
                 settings.RABBITMQ_URL,
+                heartbeat=120,  # AI 분석(최대 60s) 중 heartbeat 단절 방지
             )
             self.channel = await self.connection.channel()
             await self.channel.set_qos(prefetch_count=1)

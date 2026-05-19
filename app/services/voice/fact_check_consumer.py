@@ -49,7 +49,7 @@ class VoiceContractFactCheckConsumer:
         self.result_exchange = None
         self.dead_letter_exchange = None
 
-        self.connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
+        self.connection = await aio_pika.connect_robust(settings.RABBITMQ_URL, heartbeat=120)
         self.channel = await self.connection.channel()
         await self.channel.set_qos(prefetch_count=1)
 

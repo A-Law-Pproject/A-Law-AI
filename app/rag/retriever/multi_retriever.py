@@ -1,8 +1,12 @@
 import asyncio
+import math
 import re
+from collections import Counter
 
 from langchain_core.documents import Document
+from loguru import logger
 
+from app.core.config import settings
 from app.rag.embedding.kure import KUREEmbeddings
 from app.rag.retriever.law_graph import build_multi_law_filter, get_related_laws
 from app.rag.vector_store.base import VectorDB
@@ -43,6 +47,225 @@ def _deduplicate(documents: list[Document]) -> list[Document]:
             seen.add(key)
             unique.append(doc)
     return unique
+
+
+_HYBRID_TARGET_COLLECTIONS = {
+    "law_database",
+    "law_statutes",
+    "special_clauses_illegal",
+    "special_clauses_normal",
+}
+_ARTICLE_RE = re.compile(r"제\s*(\d+)\s*조(?:\s*의\s*(\d+))?")
+_CASE_RE = re.compile(r"\d{4}[가-힣]{1,4}\d+")
+_TOKEN_RE = re.compile(r"[A-Za-z]+(?:-[A-Za-z0-9]+)*|\d+|[가-힣]{2,}")
+
+
+def _normalize_article_token(text: str | None) -> str:
+    match = _ARTICLE_RE.search(text or "")
+    if not match:
+        return ""
+    return f"제{match.group(1)}조" + (f"의{match.group(2)}" if match.group(2) else "")
+
+
+def _normalize_case_token(text: str | None) -> str:
+    match = _CASE_RE.search(text or "")
+    return re.sub(r"\s+", "", match.group(0)) if match else ""
+
+
+def _compact_text(text: str | None) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _compact_no_space(text: str | None) -> str:
+    return re.sub(r"\s+", "", (text or "").lower())
+
+
+def _document_key(doc: Document) -> str:
+    meta = doc.metadata
+    stable_bits = [
+        str(meta.get("collection") or ""),
+        str(meta.get("id") or meta.get("doc_id") or meta.get("chunk_id") or meta.get("case_no") or ""),
+        str(meta.get("law_name") or meta.get("title") or ""),
+        str(meta.get("article") or ""),
+        doc.page_content[:160],
+    ]
+    return "|".join(stable_bits)
+
+
+def _copy_document(doc: Document) -> Document:
+    return Document(page_content=doc.page_content, metadata=dict(doc.metadata))
+
+
+def _lexical_source_text(doc: Document) -> str:
+    meta = doc.metadata
+    return "\n".join(
+        part
+        for part in [
+            meta.get("law_name"),
+            meta.get("title"),
+            meta.get("article"),
+            meta.get("case_no"),
+            doc.page_content,
+        ]
+        if part
+    )
+
+
+def _tokenize_lexical(text: str) -> list[str]:
+    normalized = _compact_text(text)
+    if not normalized:
+        return []
+
+    article_tokens = [_normalize_article_token(match.group(0)) for match in _ARTICLE_RE.finditer(normalized)]
+    case_tokens = [_normalize_case_token(match.group(0)) for match in _CASE_RE.finditer(normalized)]
+
+    stripped = _ARTICLE_RE.sub(" ", normalized)
+    stripped = _CASE_RE.sub(" ", stripped)
+    tokens = [token.lower() for token in _TOKEN_RE.findall(stripped)]
+    return [token for token in [*article_tokens, *case_tokens, *tokens] if token]
+
+
+def _exact_legal_boost(query: str, doc: Document) -> float:
+    boost = 0.0
+    meta = doc.metadata
+
+    query_articles = {
+        normalized
+        for normalized in (_normalize_article_token(match.group(0)) for match in _ARTICLE_RE.finditer(query or ""))
+        if normalized
+    }
+    doc_article = _normalize_article_token(str(meta.get("article") or ""))
+    page_article = _normalize_article_token(doc.page_content[:120])
+    if query_articles:
+        if doc_article and doc_article in query_articles:
+            boost += 7.0
+        elif page_article and page_article in query_articles:
+            boost += 4.0
+
+    query_cases = {
+        normalized
+        for normalized in (_normalize_case_token(match.group(0)) for match in _CASE_RE.finditer(query or ""))
+        if normalized
+    }
+    doc_case = _normalize_case_token(str(meta.get("case_no") or ""))
+    page_case = _normalize_case_token(doc.page_content[:160])
+    if query_cases:
+        if doc_case and doc_case in query_cases:
+            boost += 8.0
+        elif page_case and page_case in query_cases:
+            boost += 4.5
+
+    query_compact = _compact_no_space(query)
+    law_name = _compact_no_space(str(meta.get("law_name") or meta.get("title") or ""))
+    if law_name and law_name in query_compact:
+        boost += 2.0
+
+    if query_compact and query_compact in _compact_no_space(doc.page_content[:220]):
+        boost += 1.5
+
+    return boost
+
+
+def _bm25_rank_candidates(
+    query: str,
+    candidates: list[Document],
+    collection_name: str,
+    top_k: int,
+) -> list[Document]:
+    if not candidates or top_k <= 0:
+        return []
+
+    query_tokens = _tokenize_lexical(query)
+    if not query_tokens:
+        return []
+
+    doc_tokens = [_tokenize_lexical(_lexical_source_text(doc)) for doc in candidates]
+    doc_counters = [Counter(tokens) for tokens in doc_tokens]
+    doc_lengths = [max(len(tokens), 1) for tokens in doc_tokens]
+    avgdl = sum(doc_lengths) / len(doc_lengths)
+
+    document_frequency: Counter[str] = Counter()
+    for tokens in doc_tokens:
+        document_frequency.update(set(tokens))
+
+    scored: list[tuple[float, Document]] = []
+    total_docs = len(candidates)
+    k1 = 1.5
+    b = 0.75
+
+    for doc, token_counter, doc_len in zip(candidates, doc_counters, doc_lengths):
+        score = 0.0
+        for token in query_tokens:
+            tf = token_counter.get(token, 0)
+            if tf <= 0:
+                continue
+            df = document_frequency.get(token, 0)
+            idf = math.log(1 + (total_docs - df + 0.5) / (df + 0.5))
+            denominator = tf + k1 * (1 - b + b * (doc_len / max(avgdl, 1.0)))
+            score += idf * (tf * (k1 + 1)) / max(denominator, 1e-9)
+
+        score += _exact_legal_boost(query, doc)
+        if score <= 0:
+            continue
+
+        ranked_doc = _copy_document(doc)
+        ranked_doc.metadata["collection"] = collection_name
+        ranked_doc.metadata["lexical_score"] = score
+        scored.append((score, ranked_doc))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [doc for _, doc in scored[:top_k]]
+
+
+def _rrf_fuse_documents(
+    ranked_lists: dict[str, list[Document]],
+    *,
+    final_k: int,
+    rrf_k: int,
+) -> list[Document]:
+    if not ranked_lists:
+        return []
+
+    merged_scores: dict[str, float] = {}
+    merged_docs: dict[str, Document] = {}
+    merged_modes: dict[str, set[str]] = {}
+
+    for mode, docs in ranked_lists.items():
+        for rank, doc in enumerate(docs, start=1):
+            key = _document_key(doc)
+            merged_scores[key] = merged_scores.get(key, 0.0) + 1.0 / (rrf_k + rank)
+            merged_modes.setdefault(key, set()).add(mode)
+            if key not in merged_docs:
+                merged_docs[key] = _copy_document(doc)
+            if mode == "dense":
+                merged_docs[key].metadata["dense_score"] = doc.metadata.get("score", 0.0)
+            if mode == "bm25":
+                merged_docs[key].metadata["lexical_score"] = doc.metadata.get("lexical_score", 0.0)
+
+    fused: list[Document] = []
+    for key, doc in merged_docs.items():
+        doc.metadata["rrf_score"] = merged_scores[key]
+        doc.metadata["score"] = merged_scores[key]
+        doc.metadata["retrieval_modes"] = sorted(merged_modes.get(key, []))
+        fused.append(doc)
+
+    fused.sort(
+        key=lambda item: (
+            item.metadata.get("rrf_score", 0.0),
+            item.metadata.get("lexical_score", 0.0),
+            item.metadata.get("dense_score", 0.0),
+        ),
+        reverse=True,
+    )
+    return fused[:final_k]
+
+
+def _should_use_hybrid_search(collection_name: str, query: str) -> bool:
+    return bool(
+        settings.ENABLE_HYBRID_SEARCH
+        and collection_name in _HYBRID_TARGET_COLLECTIONS
+        and _compact_text(query)
+    )
 
 
 _LAW_NAME_KEYWORDS = {
@@ -177,6 +400,7 @@ def search_collection(
     filter_dict: dict | None = None,
     score_threshold: float | dict[str, float] = 0.0,
     query_vector: list[float] | None = None,
+    sparse_vector: dict | None = None,
 ) -> list[Document]:
     """단일 컬렉션(namespace)에서 유사도 검색.
 
@@ -197,7 +421,45 @@ def search_collection(
         query_vector = embeddings.embed_query(query)
 
     threshold = _resolve_threshold(score_threshold, collection_name)
-    return db.search(query_vector, collection_name, k, filter_dict, threshold)
+    dense_k = k
+    if _should_use_hybrid_search(collection_name, query):
+        dense_k = max(k, k * settings.HYBRID_DENSE_CANDIDATE_MULTIPLIER)
+
+    dense_results = db.search(
+        query_vector,
+        collection_name,
+        dense_k,
+        filter_dict,
+        threshold,
+        sparse_vector,
+    )
+    dense_results.sort(key=lambda doc: doc.metadata.get("score", 0.0), reverse=True)
+
+    if not _should_use_hybrid_search(collection_name, query) or len(dense_results) <= 1:
+        return dense_results[:k]
+
+    lexical_k = max(k, k * settings.HYBRID_LEXICAL_CANDIDATE_MULTIPLIER)
+    lexical_results = _bm25_rank_candidates(
+        query,
+        dense_results,
+        collection_name,
+        min(lexical_k, len(dense_results)),
+    )
+    if not lexical_results:
+        return dense_results[:k]
+
+    fused_results = _rrf_fuse_documents(
+        {
+            "dense": dense_results,
+            "bm25": lexical_results,
+        },
+        final_k=k,
+        rrf_k=settings.HYBRID_RRF_K,
+    )
+    if not fused_results:
+        logger.debug("[HybridSearch] RRF fusion empty for collection={}", collection_name)
+        return dense_results[:k]
+    return fused_results
 
 
 def search_multi_index(
