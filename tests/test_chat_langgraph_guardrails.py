@@ -79,6 +79,16 @@ def test_ensure_readable_markdown_answer_splits_inline_numbered_items():
     assert "\n\n따라서 집주인의 실제 거주 계획" in formatted
 
 
+def test_ensure_readable_markdown_answer_strips_heading_markers():
+    raw = "### ?붿빟\n蹂댁쬆湲덉? 怨꾩빟 醫낅즺 ??14???대궡 諛섑솚?대뒗 寃껋씠 ?먯튃?낅땲??"
+
+    formatted = _ensure_readable_markdown_answer(raw)
+
+    assert "###" not in formatted
+    assert formatted.startswith("?붿빟\n")
+    assert "蹂댁쬆湲덉?" in formatted
+
+
 @pytest.mark.asyncio
 async def test_repair_in_scope_rejection_for_lease_question():
     docs = [

@@ -137,8 +137,11 @@ def _ensure_readable_markdown_answer(answer: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
 
     # Separate inline markdown sections and warnings so the renderer can preserve structure.
-    text = re.sub(r"(?<!\n)(?=##\s)", "\n\n", text)
+    text = re.sub(r"(?<!\n)(?=#{1,6}\s)", "\n\n", text)
     text = re.sub(r"(?<!\n)[ \t]+(?=>\s)", "\n\n", text)
+
+    # Preserve section titles but hide raw markdown heading markers like ###.
+    text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
 
     # Split numbered or bold bullet lists that the model sometimes emits on one long line.
     text = re.sub(r"(?<=:)[ \t]+(?=(?:\d+\.\s+|-\s+\*\*))", "\n\n", text)
