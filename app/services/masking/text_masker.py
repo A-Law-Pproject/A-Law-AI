@@ -9,43 +9,43 @@ from typing import List, Tuple
 from loguru import logger
 
 from app.schemas.masking import MaskPosition, TextMaskingResult
+from app.services.masking.patterns import (
+    ACCOUNT_FIELD_PATTERN,
+    ADDRESS_FIELD_PATTERN,
+    ADDRESS_FRAGMENT_PATTERN,
+    BANK_ACCOUNT_PATTERN,
+    BIRTH_DATE_FIELD_PATTERN,
+    BIRTH_DATE_PATTERN,
+    BUSINESS_NO_FIELD_PATTERN,
+    BUSINESS_NO_PATTERN,
+    CORPORATE_NO_FIELD_PATTERN,
+    CORPORATE_NO_PATTERN,
+    DRIVER_LICENSE_FIELD_PATTERN,
+    DRIVER_LICENSE_VALUE_PATTERN,
+    EMAIL_FIELD_PATTERN,
+    EMAIL_PATTERN,
+    NAME_FIELD_PATTERN,
+    PASSPORT_FIELD_PATTERN,
+    PASSPORT_VALUE_PATTERN,
+    PHONE_FIELD_PATTERN,
+    PHONE_PATTERN,
+    RESIDENT_FIELD_PATTERN,
+    RESIDENT_ID_PATTERN,
+    STANDALONE_NAME_PATTERN,
+)
 
 
 _ADDRESS_MARKER = "[주소 마스킹]"
 _ACCOUNT_MARKER = "[계좌번호 마스킹]"
 _EMAIL_MARKER = "[이메일 마스킹]"
 _BUSINESS_NO_MARKER = "[사업자번호 마스킹]"
+_CORPORATE_NO_MARKER = "[법인번호 마스킹]"
 _NAME_MARKER = "[성명 마스킹]"
-
-_RESIDENT_ID_PATTERN = re.compile(r"(\d{6})\s*[- ]\s*([1-8])\s*(\d{6})")
-_PHONE_PATTERN = re.compile(
-    r"(0(?:1[016789]|2|[3-9][0-9]?))\s*[- ]\s*(\d{3,4})\s*[- ]\s*(\d{4})"
-)
-
-_ADDRESS_STOP = (
-    r"(?:주\s*민\s*(?:등\s*록\s*)?번\s*호|휴\s*대\s*전\s*화|전\s*화|연\s*락\s*처|"
-    r"성\s*명|대\s*표|등\s*록\s*번\s*호|상\s*호|소\s*속\s*공\s*인\s*중\s*개\s*사)"
-)
-_ADDRESS_FIELD_PATTERN = re.compile(
-    rf"(?P<label>주\s*소|소\s*재\s*지|재\s*지)\s*[:：]?\s*(?P<value>.+?)"
-    rf"(?=(?:\s+(?:{_ADDRESS_STOP}))|$)",
-    re.MULTILINE,
-)
-_ADDRESS_UNIT_PATTERN = re.compile(
-    r"(?:(?:\d{1,4}\s*동)\s*)?(?:\d{1,4}\s*층\s*)?(?:\d{1,4}\s*호)(?:\s*,?\s*\d{1,4}\s*호)?"
-)
-
-_ACCOUNT_PATTERN = re.compile(
-    r"(?:국민|신한|하나|우리|농협|기업|카카오뱅크|케이뱅크|토스|SC제일|우체국|수협|새마을|부산|대구|광주|전북|경남)?\s*"
-    r"(?:은행)?\s*"
-    r"(\d{2,6}(?:-\d{2,6}){2,4})"
-)
-_EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", re.IGNORECASE)
-_BUSINESS_NO_PATTERN = re.compile(r"\b(\d{3})\s*-\s*(\d{2})\s*-\s*(\d{5})\b")
-_NAME_LABEL_PATTERN = re.compile(
-    r"(?P<label>성\s*명|임\s*대\s*인|임\s*차\s*인|대\s*리\s*인)\s*[:：]?\s*(?P<value>[가-힣]{2,5}(?:\s+[가-힣]{1,3})?)",
-    re.MULTILINE,
-)
+_PHONE_MARKER = "[전화번호 마스킹]"
+_RESIDENT_MARKER = "[신분번호 마스킹]"
+_BIRTH_DATE_MARKER = "[생년월일 마스킹]"
+_PASSPORT_MARKER = "[여권번호 마스킹]"
+_DRIVER_LICENSE_MARKER = "[면허번호 마스킹]"
 
 
 class TextMasker:
@@ -54,33 +54,43 @@ class TextMasker:
         current_text = text
         total_offset = 0
 
-        current_text, resident_positions, resident_offset = self._mask_resident_id(current_text, total_offset)
-        positions.extend(resident_positions)
-        total_offset += resident_offset
+        pre_labelled_maskers = [
+            self._mask_address,
+            self._mask_labelled_account,
+            self._mask_labelled_email,
+            self._mask_labelled_business_no,
+            self._mask_labelled_corporate_no,
+            self._mask_labelled_birth_date,
+            self._mask_labelled_passport_no,
+            self._mask_labelled_driver_license_no,
+            self._mask_name,
+        ]
+        direct_maskers = [
+            self._mask_resident_id,
+            self._mask_phone,
+            self._mask_email,
+            self._mask_business_no,
+            self._mask_corporate_no,
+            self._mask_account,
+            self._mask_passport_no,
+            self._mask_driver_license_no,
+        ]
+        post_labelled_maskers = [
+            self._mask_labelled_phone,
+            self._mask_labelled_resident_id,
+        ]
 
-        current_text, phone_positions, phone_offset = self._mask_phone(current_text, total_offset)
-        positions.extend(phone_positions)
-        total_offset += phone_offset
+        for masker in [*pre_labelled_maskers, *direct_maskers, *post_labelled_maskers]:
+            current_text, new_positions, delta = masker(current_text, total_offset)
+            positions.extend(new_positions)
+            total_offset += delta
 
-        current_text, address_positions, address_offset = self._mask_address(current_text, total_offset)
-        positions.extend(address_positions)
-        total_offset += address_offset
-
-        current_text, account_positions, account_offset = self._mask_account(current_text, total_offset)
-        positions.extend(account_positions)
-        total_offset += account_offset
-
-        current_text, email_positions, email_offset = self._mask_email(current_text, total_offset)
-        positions.extend(email_positions)
-        total_offset += email_offset
-
-        current_text, business_positions, business_offset = self._mask_business_no(current_text, total_offset)
-        positions.extend(business_positions)
-        total_offset += business_offset
-
-        current_text, name_positions, name_offset = self._mask_name(current_text, total_offset)
-        positions.extend(name_positions)
-        total_offset += name_offset
+        current_text, standalone_positions, standalone_delta = self._mask_standalone_name(
+            current_text,
+            total_offset,
+        )
+        positions.extend(standalone_positions)
+        total_offset += standalone_delta
 
         mask_types_found = sorted({position.mask_type for position in positions})
         logger.info(f"Text masking completed: {len(positions)} matches, types={mask_types_found}")
@@ -105,7 +115,9 @@ class TextMasker:
         return result, positions
 
     def mask_account(self, text: str) -> Tuple[str, List[MaskPosition]]:
-        result, positions, _ = self._mask_account(text, 0)
+        result, positions, offset = self._mask_account(text, 0)
+        result, labelled_positions, _ = self._mask_labelled_account(result, offset)
+        positions.extend(labelled_positions)
         return result, positions
 
     def _mask_resident_id(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
@@ -119,17 +131,12 @@ class TextMasker:
             start = match.start() + base_offset + offset
             end = start + len(original)
             positions.append(
-                MaskPosition(
-                    start=start,
-                    end=end,
-                    mask_type="resident_id",
-                    original_length=len(original),
-                )
+                MaskPosition(start=start, end=end, mask_type="resident_id", original_length=len(original))
             )
             offset += len(masked) - len(original)
             return masked
 
-        return _RESIDENT_ID_PATTERN.sub(replace_fn, text), positions, offset
+        return RESIDENT_ID_PATTERN.sub(replace_fn, text), positions, offset
 
     def _mask_phone(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
         positions: List[MaskPosition] = []
@@ -142,133 +149,291 @@ class TextMasker:
             start = match.start() + base_offset + offset
             end = start + len(original)
             positions.append(
-                MaskPosition(
-                    start=start,
-                    end=end,
-                    mask_type="phone",
-                    original_length=len(original),
-                )
+                MaskPosition(start=start, end=end, mask_type="phone", original_length=len(original))
             )
             offset += len(masked) - len(original)
             return masked
 
-        return _PHONE_PATTERN.sub(replace_fn, text), positions, offset
+        return PHONE_PATTERN.sub(replace_fn, text), positions, offset
+
+    def _mask_email(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_with_marker(
+            text,
+            base_offset,
+            EMAIL_PATTERN,
+            marker=_EMAIL_MARKER,
+            mask_type="email",
+        )
+
+    def _mask_business_no(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_with_marker(
+            text,
+            base_offset,
+            BUSINESS_NO_PATTERN,
+            marker=_BUSINESS_NO_MARKER,
+            mask_type="business_no",
+        )
+
+    def _mask_corporate_no(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_with_marker(
+            text,
+            base_offset,
+            CORPORATE_NO_PATTERN,
+            marker=_CORPORATE_NO_MARKER,
+            mask_type="corporation_no",
+        )
+
+    def _mask_birth_date(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_with_marker(
+            text,
+            base_offset,
+            BIRTH_DATE_PATTERN,
+            marker=_BIRTH_DATE_MARKER,
+            mask_type="birth_date",
+        )
+
+    def _mask_passport_no(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_with_marker(
+            text,
+            base_offset,
+            PASSPORT_VALUE_PATTERN,
+            marker=_PASSPORT_MARKER,
+            mask_type="passport_no",
+        )
+
+    def _mask_driver_license_no(
+        self,
+        text: str,
+        base_offset: int,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_with_marker(
+            text,
+            base_offset,
+            DRIVER_LICENSE_VALUE_PATTERN,
+            marker=_DRIVER_LICENSE_MARKER,
+            mask_type="driver_license_no",
+        )
+
+    def _mask_account(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_with_marker(
+            text,
+            base_offset,
+            BANK_ACCOUNT_PATTERN,
+            marker=_ACCOUNT_MARKER,
+            mask_type="account",
+        )
 
     def _mask_address(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        current_text, positions, offset = self._mask_labelled_field(
+            text,
+            base_offset,
+            ADDRESS_FIELD_PATTERN,
+            marker=_ADDRESS_MARKER,
+            mask_type="address",
+        )
+        current_text, direct_positions, direct_offset = self._mask_with_marker(
+            current_text,
+            base_offset + offset,
+            ADDRESS_FRAGMENT_PATTERN,
+            marker=_ADDRESS_MARKER,
+            mask_type="address",
+        )
+        positions.extend(direct_positions)
+        offset += direct_offset
+        return current_text, positions, offset
+
+    def _mask_labelled_phone(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            PHONE_FIELD_PATTERN,
+            marker=_PHONE_MARKER,
+            mask_type="phone",
+        )
+
+    def _mask_labelled_resident_id(
+        self,
+        text: str,
+        base_offset: int,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            RESIDENT_FIELD_PATTERN,
+            marker=_RESIDENT_MARKER,
+            mask_type="resident_id",
+        )
+
+    def _mask_labelled_account(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            ACCOUNT_FIELD_PATTERN,
+            marker=_ACCOUNT_MARKER,
+            mask_type="account",
+        )
+
+    def _mask_labelled_email(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            EMAIL_FIELD_PATTERN,
+            marker=_EMAIL_MARKER,
+            mask_type="email",
+        )
+
+    def _mask_labelled_business_no(
+        self,
+        text: str,
+        base_offset: int,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            BUSINESS_NO_FIELD_PATTERN,
+            marker=_BUSINESS_NO_MARKER,
+            mask_type="business_no",
+        )
+
+    def _mask_labelled_corporate_no(
+        self,
+        text: str,
+        base_offset: int,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            CORPORATE_NO_FIELD_PATTERN,
+            marker=_CORPORATE_NO_MARKER,
+            mask_type="corporation_no",
+        )
+
+    def _mask_labelled_birth_date(
+        self,
+        text: str,
+        base_offset: int,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            BIRTH_DATE_FIELD_PATTERN,
+            marker=_BIRTH_DATE_MARKER,
+            mask_type="birth_date",
+        )
+
+    def _mask_labelled_passport_no(
+        self,
+        text: str,
+        base_offset: int,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            PASSPORT_FIELD_PATTERN,
+            marker=_PASSPORT_MARKER,
+            mask_type="passport_no",
+        )
+
+    def _mask_labelled_driver_license_no(
+        self,
+        text: str,
+        base_offset: int,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            DRIVER_LICENSE_FIELD_PATTERN,
+            marker=_DRIVER_LICENSE_MARKER,
+            mask_type="driver_license_no",
+        )
+
+    def _mask_name(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        return self._mask_labelled_field(
+            text,
+            base_offset,
+            NAME_FIELD_PATTERN,
+            marker=_NAME_MARKER,
+            mask_type="name",
+        )
+
+    def _mask_standalone_name(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
+        stripped = text.strip()
+        if not stripped or not STANDALONE_NAME_PATTERN.fullmatch(stripped):
+            return text, [], 0
+
+        start = text.index(stripped) + base_offset
+        end = start + len(stripped)
+        positions = [
+            MaskPosition(start=start, end=end, mask_type="name", original_length=len(stripped))
+        ]
+        return text.replace(stripped, _NAME_MARKER, 1), positions, len(_NAME_MARKER) - len(stripped)
+
+    def _mask_with_marker(
+        self,
+        text: str,
+        base_offset: int,
+        pattern: re.Pattern[str],
+        *,
+        marker: str,
+        mask_type: str,
+    ) -> Tuple[str, List[MaskPosition], int]:
         positions: List[MaskPosition] = []
         offset = 0
 
-        def replace_labelled(match: re.Match[str]) -> str:
+        def replace_fn(match: re.Match[str]) -> str:
             nonlocal offset
             original = match.group(0)
-            label = re.sub(r"\s+", "", match.group("label"))
-            value = match.group("value").strip()
+            start = match.start() + base_offset + offset
+            end = start + len(original)
+            positions.append(
+                MaskPosition(start=start, end=end, mask_type=mask_type, original_length=len(original))
+            )
+            offset += len(marker) - len(original)
+            return marker
+
+        return pattern.sub(replace_fn, text), positions, offset
+
+    def _mask_labelled_field(
+        self,
+        text: str,
+        base_offset: int,
+        pattern: re.Pattern[str],
+        *,
+        marker: str,
+        mask_type: str,
+    ) -> Tuple[str, List[MaskPosition], int]:
+        positions: List[MaskPosition] = []
+        offset = 0
+
+        def replace_fn(match: re.Match[str]) -> str:
+            nonlocal offset
+            original = match.group(0)
+            label = self._normalize_label(match.group("label"))
+            value_text = match.group("value")
+            value = value_text.strip()
             if not value:
                 return original
+            if self._is_already_masked(value):
+                return original
 
-            replacement = f"{label} {_ADDRESS_MARKER}"
+            replacement = f"{label} {marker}"
             value_start = match.start("value") + base_offset + offset
-            value_end = value_start + len(match.group("value"))
+            value_end = value_start + len(value_text)
             positions.append(
                 MaskPosition(
                     start=value_start,
                     end=value_end,
-                    mask_type="address",
-                    original_length=len(match.group("value")),
+                    mask_type=mask_type,
+                    original_length=len(value_text),
                 )
             )
             offset += len(replacement) - len(original)
             return replacement
 
-        current_text = _ADDRESS_FIELD_PATTERN.sub(replace_labelled, text)
+        return pattern.sub(replace_fn, text), positions, offset
 
-        def replace_unit(match: re.Match[str]) -> str:
-            nonlocal offset
-            original = match.group(0)
-            start = match.start() + base_offset + offset
-            end = start + len(original)
-            positions.append(
-                MaskPosition(
-                    start=start,
-                    end=end,
-                    mask_type="address",
-                    original_length=len(original),
-                )
-            )
-            offset += len(_ADDRESS_MARKER) - len(original)
-            return _ADDRESS_MARKER
+    def _normalize_label(self, label: str) -> str:
+        return re.sub(r"\s+", "", label).strip(":：")
 
-        current_text = _ADDRESS_UNIT_PATTERN.sub(replace_unit, current_text)
-        return current_text, positions, offset
-
-    def _mask_account(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
-        positions: List[MaskPosition] = []
-        offset = 0
-
-        def replace_fn(match: re.Match[str]) -> str:
-            nonlocal offset
-            original = match.group(0)
-            start = match.start() + base_offset + offset
-            end = start + len(original)
-            positions.append(
-                MaskPosition(
-                    start=start,
-                    end=end,
-                    mask_type="account",
-                    original_length=len(original),
-                )
-            )
-            offset += len(_ACCOUNT_MARKER) - len(original)
-            return _ACCOUNT_MARKER
-
-        return _ACCOUNT_PATTERN.sub(replace_fn, text), positions, offset
-
-    def _mask_email(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
-        positions: List[MaskPosition] = []
-        offset = 0
-
-        def replace_fn(match: re.Match[str]) -> str:
-            nonlocal offset
-            original = match.group(0)
-            start = match.start() + base_offset + offset
-            end = start + len(original)
-            positions.append(MaskPosition(start=start, end=end, mask_type="email", original_length=len(original)))
-            offset += len(_EMAIL_MARKER) - len(original)
-            return _EMAIL_MARKER
-
-        return _EMAIL_PATTERN.sub(replace_fn, text), positions, offset
-
-    def _mask_business_no(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
-        positions: List[MaskPosition] = []
-        offset = 0
-
-        def replace_fn(match: re.Match[str]) -> str:
-            nonlocal offset
-            original = match.group(0)
-            start = match.start() + base_offset + offset
-            end = start + len(original)
-            positions.append(MaskPosition(start=start, end=end, mask_type="business_no", original_length=len(original)))
-            offset += len(_BUSINESS_NO_MARKER) - len(original)
-            return _BUSINESS_NO_MARKER
-
-        return _BUSINESS_NO_PATTERN.sub(replace_fn, text), positions, offset
-
-    def _mask_name(self, text: str, base_offset: int) -> Tuple[str, List[MaskPosition], int]:
-        positions: List[MaskPosition] = []
-        offset = 0
-
-        def replace_fn(match: re.Match[str]) -> str:
-            nonlocal offset
-            label = re.sub(r"\s+", "", match.group("label"))
-            value = match.group("value").strip()
-            if not value:
-                return match.group(0)
-            original = match.group(0)
-            replacement = f"{label} {_NAME_MARKER}"
-            value_start = match.start("value") + base_offset + offset
-            value_end = value_start + len(match.group("value"))
-            positions.append(MaskPosition(start=value_start, end=value_end, mask_type="name", original_length=len(match.group("value"))))
-            offset += len(replacement) - len(original)
-            return replacement
-
-        return _NAME_LABEL_PATTERN.sub(replace_fn, text), positions, offset
+    def _is_already_masked(self, value: str) -> bool:
+        return "마스킹" in value or "*" in value

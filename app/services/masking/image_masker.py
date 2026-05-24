@@ -14,11 +14,36 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 from loguru import logger
+
+from app.services.masking.patterns import (
+    ACCOUNT_FIELD_PATTERN,
+    ADDRESS_FIELD_PATTERN,
+    ADDRESS_FRAGMENT_PATTERN,
+    ALL_FIELD_LABEL_PATTERN,
+    BANK_ACCOUNT_PATTERN,
+    BIRTH_DATE_FIELD_PATTERN,
+    BUSINESS_NO_FIELD_PATTERN,
+    BUSINESS_NO_PATTERN,
+    CORPORATE_NO_FIELD_PATTERN,
+    CORPORATE_NO_PATTERN,
+    DRIVER_LICENSE_FIELD_PATTERN,
+    DRIVER_LICENSE_VALUE_PATTERN,
+    EMAIL_FIELD_PATTERN,
+    EMAIL_PATTERN,
+    NAME_FIELD_PATTERN,
+    PASSPORT_FIELD_PATTERN,
+    PASSPORT_VALUE_PATTERN,
+    PHONE_FIELD_PATTERN,
+    PHONE_PATTERN,
+    RESIDENT_FIELD_PATTERN,
+    RESIDENT_ID_PATTERN,
+    SEAL_KEYWORDS,
+)
 
 
 Box = Tuple[int, int, int, int]
@@ -27,52 +52,32 @@ _BOX_PADDING_PX = 6
 _MERGE_GAP_PX = 12
 _IDENTITY_EXTRA_RIGHT_RATIO = 0.12
 
-_RESIDENT_LABEL = r"주\s*민\s*(?:등\s*록\s*)?번\s*호"
-_PHONE_LABEL = r"(?:휴\s*대\s*전\s*화|전\s*화|연\s*락\s*처)"
-_ADDRESS_LABEL = r"(?:주\s*소|소\s*재\s*지|재\s*지)"
-_IDENTITY_LABEL = r"(?:성\s*명|임\s*대\s*인|임\s*차\s*인|대\s*리\s*인|대\s*표|서\s*명|서\s*명\s*인|인\s*감|도\s*장)"
-_EMAIL_LABEL = r"(?:이\s*메\s*일|e[-\s]?mail)"
-_BUSINESS_NO_LABEL = r"사\s*업\s*자\s*(?:등\s*록\s*)?번\s*호"
-_STOP_LABEL = (
-    rf"(?:{_RESIDENT_LABEL}|{_PHONE_LABEL}|{_ADDRESS_LABEL}|{_IDENTITY_LABEL}|"
-    rf"{_EMAIL_LABEL}|{_BUSINESS_NO_LABEL}|"
-    r"등\s*록\s*번\s*호|상\s*호|소\s*속\s*공\s*인\s*중\s*개\s*사)"
-)
+_IDENTITY_FIELD_LABELS = [
+    "성명",
+    "임대인",
+    "임차인",
+    "대리인",
+    "대표",
+    "서명",
+    "서명인",
+    "인감",
+    "도장",
+    "날인",
+    "사인",
+]
 
-_LABELLED_ADDRESS_PATTERN = re.compile(
-    rf"(?P<label>{_ADDRESS_LABEL})\s*[:：]?\s*(?P<value>.+?)"
-    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)"
-)
-_LABELLED_PHONE_PATTERN = re.compile(
-    rf"(?P<label>{_PHONE_LABEL})\s*[:：]?\s*(?P<value>.+?)"
-    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)"
-)
-_LABELLED_RESIDENT_PATTERN = re.compile(
-    rf"(?P<label>{_RESIDENT_LABEL})\s*[:：]?\s*(?P<value>.+?)"
-    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)"
-)
+
+def _spaced_term(term: str) -> str:
+    return r"\s*".join(re.escape(char) for char in term if not char.isspace())
+
+
+_IDENTITY_FIELD_LABEL_PATTERN = "(?:" + "|".join(_spaced_term(label) for label in _IDENTITY_FIELD_LABELS) + ")"
+_IDENTITY_STOP_LABEL_PATTERN = rf"(?:{ALL_FIELD_LABEL_PATTERN}|{_IDENTITY_FIELD_LABEL_PATTERN})"
 _IDENTITY_FIELD_PATTERN = re.compile(
-    rf"(?P<label>{_IDENTITY_LABEL})\s*[:：]?\s*(?P<value>.+?)"
-    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)"
+    rf"(?P<label>{_IDENTITY_FIELD_LABEL_PATTERN})\s*[:：]?\s*(?P<value>.+?)"
+    rf"(?=(?:\s+(?:{_IDENTITY_STOP_LABEL_PATTERN}))|$)",
+    re.IGNORECASE | re.MULTILINE,
 )
-_LABELLED_EMAIL_PATTERN = re.compile(
-    rf"(?P<label>{_EMAIL_LABEL})\s*[:：]?\s*(?P<value>.+?)"
-    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)",
-    re.IGNORECASE,
-)
-_LABELLED_BUSINESS_NO_PATTERN = re.compile(
-    rf"(?P<label>{_BUSINESS_NO_LABEL})\s*[:：]?\s*(?P<value>.+?)"
-    rf"(?=(?:\s+(?:{_STOP_LABEL}))|$)"
-)
-
-_PHONE_VALUE_PATTERN = re.compile(
-    r"\b0(?:1[016789]|2|[3-9][0-9]?)\s*[- ]?\s*\d{3,4}\s*[- ]?\s*\d{4}\b"
-)
-_RESIDENT_VALUE_PATTERN = re.compile(r"\b\d{6}\s*[- ]?\s*[1-8]\d{6}\b")
-_EMAIL_VALUE_PATTERN = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", re.IGNORECASE)
-_BUSINESS_NO_VALUE_PATTERN = re.compile(r"\b\d{3}\s*[-]?\s*\d{2}\s*[-]?\s*\d{5}\b")
-
-_SEAL_KEYWORDS = ("인감", "서명", "도장", "대표", "성명", "인")
 
 
 @dataclass
@@ -472,6 +477,13 @@ def detect_words_with_tesseract(image_bytes: bytes) -> List[dict]:
     return words
 
 
+def _contains_seal_keyword(text: str) -> bool:
+    stripped = text.strip()
+    if stripped == "인":
+        return True
+    return any(keyword in stripped for keyword in SEAL_KEYWORDS if len(keyword) > 1)
+
+
 def find_seal_regions(
     words: List[dict],
     img_width: int,
@@ -509,56 +521,54 @@ def find_sensitive_regions_from_words(
     lines = _group_words_into_lines(words, img_width, img_height)
     regions: List[Tuple[Box, str]] = []
 
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _LABELLED_RESIDENT_PATTERN,
-            region_type="resident_id",
-            group_name="value",
-            img_width=img_width,
-            img_height=img_height,
+    labelled_specs = [
+        (RESIDENT_FIELD_PATTERN, "resident_id"),
+        (PHONE_FIELD_PATTERN, "phone"),
+        (ADDRESS_FIELD_PATTERN, "address"),
+        (NAME_FIELD_PATTERN, "name"),
+        (ACCOUNT_FIELD_PATTERN, "account"),
+        (EMAIL_FIELD_PATTERN, "email"),
+        (BUSINESS_NO_FIELD_PATTERN, "business_no"),
+        (CORPORATE_NO_FIELD_PATTERN, "corporation_no"),
+        (BIRTH_DATE_FIELD_PATTERN, "birth_date"),
+        (PASSPORT_FIELD_PATTERN, "passport_no"),
+        (DRIVER_LICENSE_FIELD_PATTERN, "driver_license_no"),
+    ]
+    for pattern, region_type in labelled_specs:
+        regions.extend(
+            _collect_pattern_regions(
+                lines,
+                pattern,
+                region_type=region_type,
+                group_name="value",
+                img_width=img_width,
+                img_height=img_height,
+            )
         )
-    )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _LABELLED_PHONE_PATTERN,
-            region_type="phone",
-            group_name="value",
-            img_width=img_width,
-            img_height=img_height,
+
+    direct_specs = [
+        (RESIDENT_ID_PATTERN, "resident_id"),
+        (PHONE_PATTERN, "phone"),
+        (EMAIL_PATTERN, "email"),
+        (BUSINESS_NO_PATTERN, "business_no"),
+        (CORPORATE_NO_PATTERN, "corporation_no"),
+        (BANK_ACCOUNT_PATTERN, "account"),
+        (PASSPORT_VALUE_PATTERN, "passport_no"),
+        (DRIVER_LICENSE_VALUE_PATTERN, "driver_license_no"),
+        (ADDRESS_FRAGMENT_PATTERN, "address"),
+    ]
+    for pattern, region_type in direct_specs:
+        regions.extend(
+            _collect_pattern_regions(
+                lines,
+                pattern,
+                region_type=region_type,
+                group_name=None,
+                img_width=img_width,
+                img_height=img_height,
+            )
         )
-    )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _LABELLED_ADDRESS_PATTERN,
-            region_type="address",
-            group_name="value",
-            img_width=img_width,
-            img_height=img_height,
-        )
-    )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _RESIDENT_VALUE_PATTERN,
-            region_type="resident_id",
-            group_name=None,
-            img_width=img_width,
-            img_height=img_height,
-        )
-    )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _PHONE_VALUE_PATTERN,
-            region_type="phone",
-            group_name=None,
-            img_width=img_width,
-            img_height=img_height,
-        )
-    )
+
     regions.extend(
         _collect_pattern_regions(
             lines,
@@ -571,52 +581,10 @@ def find_sensitive_regions_from_words(
             extra_vertical_px=10,
         )
     )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _LABELLED_EMAIL_PATTERN,
-            region_type="email",
-            group_name="value",
-            img_width=img_width,
-            img_height=img_height,
-        )
-    )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _EMAIL_VALUE_PATTERN,
-            region_type="email",
-            group_name=None,
-            img_width=img_width,
-            img_height=img_height,
-        )
-    )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _LABELLED_BUSINESS_NO_PATTERN,
-            region_type="business_no",
-            group_name="value",
-            img_width=img_width,
-            img_height=img_height,
-        )
-    )
-    regions.extend(
-        _collect_pattern_regions(
-            lines,
-            _BUSINESS_NO_VALUE_PATTERN,
-            region_type="business_no",
-            group_name=None,
-            img_width=img_width,
-            img_height=img_height,
-        )
-    )
 
     for word in words:
         text = str(word.get("text", "")).strip()
-        if not text:
-            continue
-        if any(keyword in text for keyword in _SEAL_KEYWORDS):
+        if text and _contains_seal_keyword(text):
             regions.append((_word_to_box(word, img_width, img_height), "seal_signature"))
 
     if image_bytes:
@@ -638,9 +606,9 @@ def mask_image_regions(image_bytes: bytes, mask_regions: List[Box]) -> bytes:
         roi_h, roi_w = roi.shape[:2]
         if roi_h < 1 or roi_w < 1:
             continue
-        # 박스 크기에 비례한 커널 (홀수, 최소 51)
-        k = max(51, (min(roi_w, roi_h) // 2) | 1)
-        blurred = cv2.GaussianBlur(roi, (k, k), 0)
+        # Scale the blur kernel with the masked region so small boxes are still obscured.
+        kernel_size = max(51, (min(roi_w, roi_h) // 2) | 1)
+        blurred = cv2.GaussianBlur(roi, (kernel_size, kernel_size), 0)
         image[top:bottom, left:right] = blurred
 
     ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
