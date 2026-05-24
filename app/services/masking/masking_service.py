@@ -124,10 +124,12 @@ async def mask_and_store(
                 masked_image_bytes = working_image_bytes
 
         masked_s3_key = _build_masked_s3_key(s3_key)
+        logger.info(f"[MASKING] S3 업로드 시도: {masked_s3_key} ({len(masked_image_bytes)} bytes)")
         try:
             await _upload_masked_image_async(S3Client(), masked_image_bytes, masked_s3_key)
+            logger.info(f"[MASKING] S3 업로드 성공: {masked_s3_key}")
         except Exception as exc:
-            logger.warning(f"Failed to upload masked image to S3: {exc}")
+            logger.error(f"[MASKING] S3 업로드 실패: {type(exc).__name__}: {exc}")
             masked_s3_key = None
 
         mask_types = set(text_result.mask_types_found)

@@ -103,6 +103,12 @@ async def run_ocr_from_s3(
         if settings.ENABLE_MASKING:
             try:
                 words_dicts = [word.model_dump() for word in result.words] if result.words else None
+                logger.info(
+                    f"[MASKING] 시작 - s3_key={request.s3_key}, "
+                    f"words={len(words_dicts) if words_dicts else 0}, "
+                    f"img={result.image_width}x{result.image_height}, "
+                    f"pre_mask_count={pre_mask_result.mask_count}"
+                )
                 masking_result = await mask_and_store(
                     original_text=result.full_text or result.markdown or "",
                     original_image_bytes=original_image_bytes,
@@ -114,6 +120,12 @@ async def run_ocr_from_s3(
                     pre_mask_count=pre_mask_result.mask_count,
                     pre_mask_types=pre_mask_result.mask_types,
                 )
+                logger.info(
+                    f"[MASKING] 완료 - success={masking_result.success}, "
+                    f"masked_s3_key={masking_result.masked_s3_key}, "
+                    f"mask_count={masking_result.metadata.mask_count if masking_result.metadata else 0}, "
+                    f"error={masking_result.error_message}"
+                )
                 if masking_result.masked_s3_key:
                     result.masked_image_url = (
                         f"https://{settings.AWS_S3_BUCKET}.s3.amazonaws.com"
@@ -122,8 +134,13 @@ async def run_ocr_from_s3(
                     effective_image_url = result.masked_image_url
                     # 마스킹된 버전으로 교체됐으므로 원본 삭제
                     await asyncio.to_thread(s3_client.delete_file, request.s3_key)
+                else:
+                    logger.error(
+                        f"[MASKING] masked_s3_key가 None — S3 업로드 실패 또는 마스킹 파이프라인 오류. "
+                        f"원본 이미지가 그대로 사용됩니다. error={masking_result.error_message}"
+                    )
             except Exception as exc:
-                logger.warning(f"Failed to persist masking artifacts after OCR: {type(exc).__name__}: {exc}")
+                logger.error(f"[MASKING] 예외 발생: {type(exc).__name__}: {exc}")
 
         # MongoDB 저장: 마스킹 후 최종 URL로 저장해야 Spring findByImageUrl 조회가 일치함
         try:
