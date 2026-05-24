@@ -490,6 +490,52 @@ class GPTStructurizer:
             base_url=base_url
         )
 
+    MARKDOWN_POLISH_PROMPT = """당신은 OCR로 추출된 한국어 계약서 텍스트를 가독성 좋은 Markdown으로 정리하는 편집자입니다.
+
+규칙:
+- 원문의 단어, 숫자, 금액, 날짜, 이름, 주소, 주민번호, 특약 내용은 절대 변경/추가/요약하지 마세요.
+- 의역, 부연 설명, 새로운 문장 추가 금지. 오직 서식만 정리합니다.
+- 깨진 줄바꿈, 분리된 단어("임 대 인" → "임대인"), 잘못된 표 정렬 등을 자연스럽게 보정합니다.
+- 제목/소제목은 적절한 #, ## heading으로, 항목 나열은 -, 1. 등 list로, 표 형태 데이터는 Markdown 표(`|`)로 표현합니다.
+- 특약사항은 번호가 있으면 번호 list, 없으면 - bullet으로 정리합니다.
+- 명백한 OCR 오타가 아니면 글자를 바꾸지 마세요. 확신이 없으면 원문 그대로 둡니다.
+- Markdown 본문만 출력하고, 설명/머리말/```markdown 같은 코드 펜스는 포함하지 마세요.
+"""
+
+    def prettify_markdown(self, markdown: str) -> str:
+        """
+        OCR로 추출된 markdown을 가독성 위주로 정리
+
+        내용은 보존하고 서식만 다듬는다. 실패 시 원문을 그대로 반환.
+        """
+        if not markdown or not markdown.strip():
+            return markdown
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.MARKDOWN_POLISH_PROMPT},
+                    {"role": "user", "content": f"다음 OCR 결과를 정리해주세요:\n\n{markdown}"},
+                ],
+                temperature=0.1,
+            )
+            polished = (response.choices[0].message.content or "").strip()
+            if not polished:
+                return markdown
+            # 모델이 코드 펜스를 붙였을 경우 제거
+            if polished.startswith("```"):
+                lines = polished.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                polished = "\n".join(lines).strip()
+            return polished
+        except Exception as e:
+            logger.warning(f"Markdown 정제 실패, 원문 사용: {e}")
+            return markdown
+
     def structurize(self, markdown: str) -> LeaseContractDTO:
         """
         Markdown 텍스트를 구조화된 DTO로 변환
@@ -873,6 +919,12 @@ class UpstageOCRPipeline:
                 response.markdown = str(content) if content else ""
                 raw_text = str(content) if content else ""
 
+            # Markdown 가독성 정제 (내용은 유지, 서식만 다듬음)
+            if response.markdown:
+                logger.info("1-1. Markdown 가독성 정제 시작")
+                response.markdown = self.gpt.prettify_markdown(response.markdown)
+                logger.info("Markdown 정제 완료")
+
             # Document OCR API 호출 - 단어별 정확한 좌표 획득
             logger.info("2. Upstage Document OCR 시작 (단어별 좌표)")
             ocr_words = None
@@ -890,10 +942,15 @@ class UpstageOCRPipeline:
                 logger.info(f"Document OCR 완료: {len(ocr_words)} words")
             except Exception as ocr_err:
                 logger.warning(f"Document OCR 실패 (Document Parse로 fallback): {ocr_err}")
-                _, blocks, _ = parse_upstage_elements(
+                fallback_words, blocks, _ = parse_upstage_elements(
                     elements, response.image_width, response.image_height
                 )
+                # fallback에서 만든 word 박스도 마스킹용 좌표로 보존
+                response.words = fallback_words
                 response.blocks = blocks
+                logger.info(
+                    f"Document Parse fallback에서 {len(fallback_words)} words 복구"
+                )
 
             # 표 텍스트 후처리 (줄바꿈 오류 보정)
             # 전략 1→2→3 순서로 시도, enable_llm_table_fix=True 시 LLM 추가 적용

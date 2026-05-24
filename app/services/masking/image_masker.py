@@ -381,66 +381,75 @@ def _find_red_seal_regions(image_bytes: bytes) -> List[Box]:
     return regions
 
 
-def _prepare_tesseract_input(image_bytes: bytes) -> bytes:
+_TESSERACT_MIN_WIDTH_PX = 2000  # 작은 이미지 업스케일 임계값 (한글 가독성)
+_TESSERACT_UPSCALE_FACTOR = 2.0
+_TESSERACT_MIN_CONFIDENCE = 30.0  # conf < 30 단어는 노이즈로 폐기
+_TESSERACT_SPARSE_FALLBACK_THRESHOLD = 20  # 1차 단어 수가 이보다 적으면 PSM 11로 보강
+
+
+def _prepare_tesseract_input(image_bytes: bytes) -> Tuple[bytes, float]:
+    """Tesseract 입력 전처리. 업스케일 비율도 반환해서 좌표 역변환에 사용."""
     image = _decode_image(image_bytes)
+    height, width = image.shape[:2]
+
+    scale = 1.0
+    if width and width < _TESSERACT_MIN_WIDTH_PX:
+        scale = _TESSERACT_UPSCALE_FACTOR
+        image = cv2.resize(
+            image,
+            (int(width * scale), int(height * scale)),
+            interpolation=cv2.INTER_CUBIC,
+        )
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
-    binary = cv2.adaptiveThreshold(
-        denoised,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31,
-        11,
-    )
+    # Otsu가 LSTM 한글 인식에 더 안정적 (adaptive는 작은 한글 획을 잘라먹는 경향)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     ok, encoded = cv2.imencode(".png", binary)
     if not ok:
         raise ValueError("Failed to encode preprocessed image for Tesseract")
-    return encoded.tobytes()
+    return encoded.tobytes(), scale
 
 
-def detect_words_with_tesseract(image_bytes: bytes) -> List[dict]:
-    tesseract_cmd = shutil.which("tesseract")
-    if not tesseract_cmd:
-        raise RuntimeError("Tesseract is not installed")
-
-    img_width, img_height = _image_size(image_bytes)
-    prepared_bytes = _prepare_tesseract_input(image_bytes)
-
-    with tempfile.TemporaryDirectory(prefix="masking-ocr-") as temp_dir:
-        input_path = f"{temp_dir}/input.png"
-        with open(input_path, "wb") as file:
-            file.write(prepared_bytes)
-
-        command = [
-            tesseract_cmd,
-            input_path,
-            "stdout",
-            "-l",
-            "kor+eng",
-            "--oem",
-            "1",
-            "--psm",
-            "6",
-            "tsv",
-        ]
-        process = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            timeout=20,
-            check=False,
-        )
-
+def _run_tesseract_tsv(
+    tesseract_cmd: str,
+    input_path: str,
+    psm: str,
+) -> str:
+    command = [
+        tesseract_cmd,
+        input_path,
+        "stdout",
+        "-l", "kor+eng",
+        "--oem", "1",
+        "--psm", psm,
+        "-c", "preserve_interword_spaces=1",
+        "-c", "user_defined_dpi=300",
+        "tsv",
+    ]
+    process = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        timeout=30,
+        check=False,
+    )
     if process.returncode != 0:
         stderr = process.stderr.strip() or "unknown tesseract error"
-        raise RuntimeError(f"Tesseract word detection failed: {stderr}")
+        raise RuntimeError(f"Tesseract word detection failed (psm={psm}): {stderr}")
+    return process.stdout
 
+
+def _parse_tesseract_tsv(
+    tsv_output: str,
+    img_width: int,
+    img_height: int,
+    scale: float,
+) -> List[dict]:
     words: List[dict] = []
-    reader = csv.DictReader(io.StringIO(process.stdout), delimiter="\t")
+    reader = csv.DictReader(io.StringIO(tsv_output), delimiter="\t")
     for row in reader:
         text = (row.get("text") or "").strip()
         if not text:
@@ -455,8 +464,15 @@ def detect_words_with_tesseract(image_bytes: bytes) -> List[dict]:
         except ValueError:
             continue
 
-        if conf < 0 or width <= 0 or height <= 0:
+        if conf < _TESSERACT_MIN_CONFIDENCE or width <= 0 or height <= 0:
             continue
+
+        # 업스케일된 좌표를 원본 픽셀 좌표로 환산
+        if scale and scale != 1.0:
+            left = int(left / scale)
+            top = int(top / scale)
+            width = int(width / scale)
+            height = int(height / scale)
 
         words.append(
             {
@@ -472,8 +488,53 @@ def detect_words_with_tesseract(image_bytes: bytes) -> List[dict]:
                 "px_height": height,
             }
         )
+    return words
 
-    logger.info(f"Local Tesseract detected {len(words)} words for pre-OCR masking")
+
+def detect_words_with_tesseract(image_bytes: bytes) -> List[dict]:
+    tesseract_cmd = shutil.which("tesseract")
+    if not tesseract_cmd:
+        raise RuntimeError("Tesseract is not installed")
+
+    img_width, img_height = _image_size(image_bytes)
+    prepared_bytes, scale = _prepare_tesseract_input(image_bytes)
+
+    with tempfile.TemporaryDirectory(prefix="masking-ocr-") as temp_dir:
+        input_path = f"{temp_dir}/input.png"
+        with open(input_path, "wb") as file:
+            file.write(prepared_bytes)
+
+        # 1차: PSM 3 (auto layout) — 계약서처럼 블록 구성이 다양한 문서에 적합
+        primary_tsv = _run_tesseract_tsv(tesseract_cmd, input_path, psm="3")
+        words = _parse_tesseract_tsv(primary_tsv, img_width, img_height, scale)
+
+        # 보강: 1차에서 단어가 적게 잡히면 PSM 11(sparse text)로 한 번 더 시도
+        if len(words) < _TESSERACT_SPARSE_FALLBACK_THRESHOLD:
+            try:
+                fallback_tsv = _run_tesseract_tsv(tesseract_cmd, input_path, psm="11")
+                fallback_words = _parse_tesseract_tsv(
+                    fallback_tsv, img_width, img_height, scale
+                )
+                # 중복 제거: 동일 위치(±5px) + 동일 텍스트 단어는 1차 결과 우선
+                existing_keys = {
+                    (w["text"], w["px_x"] // 10, w["px_y"] // 10) for w in words
+                }
+                for w in fallback_words:
+                    key = (w["text"], w["px_x"] // 10, w["px_y"] // 10)
+                    if key not in existing_keys:
+                        words.append(w)
+                        existing_keys.add(key)
+                logger.info(
+                    f"Tesseract PSM11 fallback added {len(fallback_words)} words "
+                    f"(total now {len(words)})"
+                )
+            except Exception as exc:
+                logger.warning(f"Tesseract PSM11 fallback skipped: {exc}")
+
+    logger.info(
+        f"Local Tesseract detected {len(words)} words for pre-OCR masking "
+        f"(scale={scale:.2f}, min_conf={_TESSERACT_MIN_CONFIDENCE})"
+    )
     return words
 
 

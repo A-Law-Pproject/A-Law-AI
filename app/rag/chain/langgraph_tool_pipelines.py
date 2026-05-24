@@ -5,6 +5,7 @@ import json
 import re
 import time
 from collections import defaultdict
+from pathlib import PurePosixPath
 from typing import Any, TypedDict
 
 from langchain_core.documents import Document
@@ -36,6 +37,7 @@ from app.rag.retriever.search_cache import (
     deserialize_documents,
     serialize_documents,
 )
+from app.rag.utils.markdown_sanitizer import ensure_readable_markdown_answer
 from app.rag.vector_store.base import VectorDB
 from app.rag.embedding.kure import KUREEmbeddings
 from app.schemas.risk_analysis import ClauseRisk, ContractRiskResult
@@ -54,6 +56,8 @@ from app.rag.chain.chain import (  # noqa: E402
     _ground_clause_result,
     _grounded_law_references,
     _is_lease_related,
+    _clean_reference_part,
+    _legal_reference_from_doc,
     _law_search_query_for_clause,
     _calibrate_clause_result,
     _is_owner_succession_safe_clause,
@@ -67,7 +71,7 @@ from app.rag.chain.chain import (  # noqa: E402
 )
 
 
-CHAT_TIMEOUT_SECONDS = 25.0
+CHAT_TIMEOUT_SECONDS = 20.0
 RISK_TIMEOUT_SECONDS = 30.0
 CHAT_MAX_TOOL_ROUNDS = 1
 RISK_MAX_TOOL_ROUNDS = 2
@@ -92,7 +96,9 @@ def _sort_docs(docs: list[Document]) -> list[Document]:
 _SOURCE_COLLECTION_LABELS = {
     "law_database": "판례·해설",
     "law_statutes": "법령",
+    "law_mcp": "법령",
     "contracts": "계약서 예시",
+    "precedent_mcp": "판례/법리",
     # "special_clauses_illegal": "독소조항 사례",
     # "special_clauses_normal": "일반조항 사례",
 }
@@ -102,59 +108,134 @@ def _display_source_collection(collection: str) -> str:
     return _SOURCE_COLLECTION_LABELS.get(collection, "참고문서")
 
 
-def _format_sources(docs: list[Document], limit: int = 3) -> list[str]:
-    sources: list[str] = []
-    for doc in docs[:limit]:
-        meta = doc.metadata
-        coll = meta.get("collection", "")
-        parts = [
-            part
-            for part in [
-                meta.get("law_name"),
-                meta.get("article") or meta.get("title") or meta.get("category"),
-            ]
-            if part
-        ]
-        collection_label = _display_source_collection(coll)
-        label = f"[{collection_label}] {' '.join(parts)}" if parts else f"[{collection_label}]"
-
-        # law_statutes / law_database: 조항 핵심 내용 첫 문장 추가
-        if coll in ("law_statutes", "law_database") and doc.page_content:
-            snippet = doc.page_content.split("\n")[0].strip()[:100]
-            if snippet:
-                label += f" — {snippet}"
-
-        sources.append(label)
-    return sources
-
-
-def _ensure_readable_markdown_answer(answer: str) -> str:
-    text = (answer or "").replace("\r\n", "\n").strip()
+def _humanize_source_hint(value: Any) -> str:
+    text = _clean_reference_part(value)
     if not text:
         return ""
 
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    normalized = text.replace("\\", "/")
+    if normalized.startswith(("http://", "https://")):
+        normalized = normalized.rstrip("/").rsplit("/", 1)[-1]
+    elif "/" in normalized and len(normalized) > 48:
+        parts = [part for part in normalized.split("/") if part]
+        if len(parts) >= 2:
+            normalized = str(PurePosixPath(parts[-2]) / parts[-1])
 
-    # Separate inline markdown sections and warnings so the renderer can preserve structure.
-    text = re.sub(r"(?<!\n)(?=#{1,6}\s)", "\n\n", text)
-    text = re.sub(r"(?<!\n)[ \t]+(?=>\s)", "\n\n", text)
+    return normalized.strip()
 
-    # Preserve section titles but hide raw markdown heading markers like ###.
-    text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
 
-    # Split numbered or bold bullet lists that the model sometimes emits on one long line.
-    text = re.sub(r"(?<=:)[ \t]+(?=(?:\d+\.\s+|-\s+\*\*))", "\n\n", text)
-    text = re.sub(r"(?<!\n)[ \t]+(?=(?:\d+\.\s+|-\s+\*\*))", "\n", text)
+def _source_title_from_doc(doc: Document) -> str:
+    meta = doc.metadata or {}
 
-    # Move wrap-up sentences out of the last list item when they start with common connectives.
-    text = re.sub(
-        r"(?<=[.!?])[ \t]+(?=(?:따라서|정리하면|결론적으로|즉,|즉\s|다만|한편|추가로))",
-        "\n\n",
-        text,
+    law_reference = _legal_reference_from_doc(doc)
+    if law_reference:
+        return law_reference
+
+    source_type = str(meta.get("source_type") or "")
+    if source_type.startswith(("precedent", "live_precedent")):
+        parts = [
+            _clean_reference_part(meta.get("title") or meta.get("case_name")),
+            _clean_reference_part(meta.get("case_no")),
+        ]
+        return " ".join(part for part in parts if part).strip()
+
+    for key in ("reference", "title", "name", "heading", "source_file", "filename"):
+        value = _clean_reference_part(meta.get(key))
+        if value:
+            return value
+
+    for key in ("source_path", "source"):
+        value = _humanize_source_hint(meta.get(key))
+        if value:
+            return value
+
+    lines = str(doc.page_content or "").splitlines()
+    first_line = lines[0].strip() if lines else ""
+    return first_line[:80]
+
+
+def _format_sources(docs: list[Document], limit: int = 3) -> list[str]:
+    sources: list[str] = []
+    seen: set[str] = set()
+    for doc in docs:
+        meta = doc.metadata or {}
+        coll = meta.get("collection", "")
+        collection_label = _display_source_collection(coll)
+        title = _source_title_from_doc(doc)
+        label = f"[{collection_label}] {title}" if title else f"[{collection_label}]"
+
+        # law_statutes / law_database: 조항 핵심 내용 첫 문장 추가
+        if coll in ("law_statutes", "law_database", "law_mcp") and doc.page_content:
+            snippet = doc.page_content.split("\n")[0].strip()[:100]
+            if snippet and snippet not in label:
+                label += f" - {snippet}"
+
+        if label in seen:
+            continue
+        seen.add(label)
+        sources.append(label)
+        if len(sources) >= limit:
+            break
+    return sources
+
+
+# Backwards-compatible alias: tests still import `_ensure_readable_markdown_answer`.
+_ensure_readable_markdown_answer = ensure_readable_markdown_answer
+
+
+_SOURCE_INDEX_RE = re.compile(r"\[(?:문서|자료|doc(?:ument)?)\s*(\d+)\]", re.IGNORECASE)
+_INLINE_SOURCE_NOTE_RE = re.compile(
+    r"\(?\s*(?:참고|출처)\s*:\s*(?:\[(?:문서|자료|doc(?:ument)?)\s*\d+\]\s*,?\s*)+\)?",
+    re.IGNORECASE,
+)
+_TRAILING_SOURCE_SECTION_RE = re.compile(
+    r"\n{2,}(?:참고\s*(?:문서|출처)|출처)\s*\n(?:.+\n?)*\Z",
+)
+
+
+def _select_answer_sources(answer: str, sources: list[str], limit: int = 3) -> list[str]:
+    selected: list[str] = []
+    for raw_index in _SOURCE_INDEX_RE.findall(answer or ""):
+        source_index = int(raw_index) - 1
+        if 0 <= source_index < len(sources):
+            source = sources[source_index]
+            if source not in selected:
+                selected.append(source)
+
+    if selected:
+        return selected[:limit]
+    return sources[:limit]
+
+
+def _strip_placeholder_source_notes(answer: str) -> str:
+    text = _INLINE_SOURCE_NOTE_RE.sub("", answer or "")
+    text = _SOURCE_INDEX_RE.sub("", text)
+    text = re.sub(r"\(\s*\)", "", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
+
+
+def _append_source_section(answer: str, sources: list[str]) -> str:
+    if not sources:
+        return answer.strip()
+
+    selected_sources = _select_answer_sources(answer, sources)
+    if not selected_sources:
+        return answer.strip()
+
+    body = _TRAILING_SOURCE_SECTION_RE.sub("", answer or "").strip()
+    source_lines = "\n".join(
+        f"{index}. {source}"
+        for index, source in enumerate(selected_sources, start=1)
     )
+    return f"{body}\n\n참고 문서\n{source_lines}".strip()
 
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+def _finalize_chat_answer(answer: str, sources: list[str]) -> str:
+    text = ensure_readable_markdown_answer(answer)
+    text = _strip_placeholder_source_notes(text)
+    text = ensure_readable_markdown_answer(text)
+    return _append_source_section(text, sources)
 
 
 def _compact_history(history: list[dict], limit: int = 6) -> str:
@@ -701,19 +782,18 @@ def _build_chat_context(state: ChatGraphState) -> tuple[str, list[Document]]:
         if not docs:
             continue
         all_docs.extend(docs)
-        sections.append(f"[{label}]\n{build_context(docs, max_length=1000)}")
+        sections.append(f"[{label}]\n{build_context(docs, max_length=800)}")
 
-    return "\n\n".join(sections)[:3600] if sections else "관련 근거를 찾지 못했습니다.", _sort_docs(all_docs)
+    return "\n\n".join(sections)[:2800] if sections else "관련 근거를 찾지 못했습니다.", _sort_docs(all_docs)
 
 
 def _build_chat_fallback_answer(question: str, context: str, sources: list[str]) -> str:
-    source_line = f"\n\n참고 출처: {', '.join(sources[:2])}" if sources else ""
-    return _ensure_readable_markdown_answer(
+    return _finalize_chat_answer(
         (
             "죄송합니다. 현재 응답 생성에 시간이 더 걸리고 있습니다. "
             "잠시 후 다시 시도해 주시거나, 질문을 좀 더 구체적으로 입력해 주세요."
-            f"{source_line}"
-        )
+        ),
+        sources,
     )
 
 
@@ -722,7 +802,6 @@ def _is_scope_rejection_answer(answer: str) -> bool:
 
 
 def _build_in_scope_guardrail_fallback(question: str, sources: list[str]) -> str:
-    source_line = f"\n\n참고 출처: {', '.join(sources[:2])}" if sources else ""
     if "보증금" in question:
         guidance = (
             "보증금은 계약서에 정한 지급 시기가 있으면 그 약정이 우선하고, "
@@ -733,12 +812,12 @@ def _build_in_scope_guardrail_fallback(question: str, sources: list[str]) -> str
             "구체 판단을 위해서는 계약서의 관련 조항, 핵심 일정, 특약 내용을 함께 확인하시는 것이 좋습니다."
         )
     return (
-        _ensure_readable_markdown_answer(
+        _finalize_chat_answer(
             (
                 "질문하신 내용은 임대차 범위 안에 있습니다. "
                 f"현재 자동 응답이 범위 밖 질문으로 잘못 처리되었습니다. {guidance}"
-                f"{source_line}"
-            )
+            ),
+            sources,
         )
     )
 
@@ -786,7 +865,7 @@ async def _repair_in_scope_rejection(
     repaired_answer = repaired.content
     if _is_scope_rejection_answer(repaired_answer):
         return _build_in_scope_guardrail_fallback(question, _format_sources(docs))
-    return _ensure_readable_markdown_answer(repaired_answer)
+    return _finalize_chat_answer(repaired_answer, _format_sources(docs))
 
 
 def _should_force_caution(answer: str, evidence: dict[str, list[Document]]) -> bool:
@@ -1216,16 +1295,17 @@ def _build_chat_graph(
         if state.get("use_compression") and docs and _remaining_seconds(state["deadline"]) > 2.5:
             try:
                 docs = await compress_documents(docs, state["question"], llm)
-                context = build_context(docs, max_length=3000)
+                context = build_context(docs, max_length=2400)
             except Exception as exc:
                 logger.debug("[ChatGraph] compression skipped: {}", exc)
 
+        sources = _format_sources(docs)
         remaining = _remaining_seconds(state["deadline"])
         if remaining < 0.5:
-            answer = _build_chat_fallback_answer(state["question"], context, _format_sources(docs))
+            answer = _build_chat_fallback_answer(state["question"], context, sources)
         else:
             history_messages = []
-            for msg in state.get("history", [])[-10:]:
+            for msg in state.get("history", [])[-6:]:
                 if msg.get("role") == "user":
                     history_messages.append(HumanMessage(content=msg["content"]))
                 elif msg.get("role") == "assistant":
@@ -1235,17 +1315,22 @@ def _build_chat_graph(
                 history=history_messages,
                 question=state["question"],
             )
-            answer_timeout = min(remaining - 0.3, 18.0)
+            answer_llm = (
+                get_fast_llm()
+                if state.get("query_type") in {"procedure_qa", "term_explain"}
+                else llm
+            )
+            answer_timeout = min(remaining - 0.3, 10.0 if answer_llm is not llm else 12.0)
             try:
                 with LLM_LATENCY.time():
                     response = await asyncio.wait_for(
-                        llm.ainvoke(prompt_messages),
+                        answer_llm.ainvoke(prompt_messages),
                         timeout=answer_timeout,
                     )
                 answer = response.content
             except (asyncio.TimeoutError, Exception) as exc:
                 logger.warning("[ChatGraph:answer_node] LLM timeout/error: {}", exc)
-                answer = _build_chat_fallback_answer(state["question"], context, _format_sources(docs))
+                answer = _build_chat_fallback_answer(state["question"], context, sources)
 
         answer = await _repair_in_scope_rejection(
             question=state["question"],
@@ -1262,7 +1347,7 @@ def _build_chat_graph(
 
         if _should_force_caution(answer, state.get("evidence", {})):
             answer += "\n\n다만 이 결론은 조문과 판례 법리를 함께 더 확인해 단정하는 것이 안전합니다."
-        answer = _ensure_readable_markdown_answer(answer)
+        answer = _finalize_chat_answer(answer, sources)
 
         observe_rag_interaction(
             endpoint="chat_rag_langgraph",
@@ -1272,7 +1357,7 @@ def _build_chat_graph(
         )
         return {
             "answer": answer,
-            "sources": _format_sources(docs),
+            "sources": sources,
             "source_documents": docs,
             "context": context,
         }

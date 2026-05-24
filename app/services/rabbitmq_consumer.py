@@ -27,6 +27,7 @@ from app.schemas.contract_analysis_dto import (
 from app.rag.chain.chain import build_context, detect_risk_contract, _extract_reference_from_text
 from app.rag.chain.prompts import CONTRACT_QA_PROMPT
 from app.rag.retriever.multi_retriever import async_search_multi_index
+from app.rag.utils.markdown_sanitizer import ensure_readable_markdown_answer
 
 # 재시도 정책
 MAX_RETRY_COUNT: int = 3          # 최대 재시도 횟수 (초과 시 DLQ)
@@ -473,7 +474,9 @@ class RabbitMQConsumer:
 
                 for point in summary_result.get("key_points", []):
                     if isinstance(point, dict) and "answer" in point:
-                        summary_text_parts.append(f"• {point['answer']}")
+                        cleaned_answer = ensure_readable_markdown_answer(point["answer"])
+                        if cleaned_answer:
+                            summary_text_parts.append(f"• {cleaned_answer}")
 
                 summary_text = "\n\n".join(summary_text_parts) if summary_text_parts else "계약서 요약 정보가 없습니다."
                 basic_info = summary_result.get("basic_info", {})

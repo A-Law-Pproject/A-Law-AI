@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 from app.rag.chain.langgraph_tool_pipelines import (
     _classify_query,
     _ensure_readable_markdown_answer,
+    _finalize_chat_answer,
     _format_sources,
     _repair_in_scope_rejection,
 )
@@ -55,7 +56,7 @@ def test_format_sources_hides_internal_collection_names():
     sources = _format_sources(docs)
 
     assert sources == [
-        "[법령] 주택임대차보호법 제3조 — 주택의 인도와 주민등록을 마친 때에는 제삼자에 대하여 효력이 생긴다."
+        "[법령] 주택임대차보호법 제3조 - 주택의 인도와 주민등록을 마친 때에는 제삼자에 대하여 효력이 생긴다."
     ]
     assert all("law_statutes" not in source for source in sources)
 
@@ -72,10 +73,11 @@ def test_ensure_readable_markdown_answer_splits_inline_numbered_items():
 
     formatted = _ensure_readable_markdown_answer(raw)
 
-    assert "사항이 있습니다:\n\n1. **증명 책임**" in formatted
-    assert "\n2. **정당한 사유**" in formatted
-    assert "\n3. **갱신 요구 기간**" in formatted
-    assert "\n4. **손해배상**" in formatted
+    assert "**" not in formatted
+    assert "사항이 있습니다:\n\n1. 증명 책임" in formatted
+    assert "\n2. 정당한 사유" in formatted
+    assert "\n3. 갱신 요구 기간" in formatted
+    assert "\n4. 손해배상" in formatted
     assert "\n\n따라서 집주인의 실제 거주 계획" in formatted
 
 
@@ -87,6 +89,24 @@ def test_ensure_readable_markdown_answer_strips_heading_markers():
     assert "###" not in formatted
     assert formatted.startswith("?붿빟\n")
     assert "蹂댁쬆湲덉?" in formatted
+
+
+def test_finalize_chat_answer_appends_human_readable_sources():
+    sources = [
+        "[법령] 주택임대차보호법 제6조의3 - 임대인은 자신 또는 직계존비속의 실제 거주를 이유로 갱신을 거절할 수 있다.",
+        "[법령] 주택임대차보호법 제6조의3 제5항 - 허위 실거주라면 손해배상을 청구할 수 있다.",
+    ]
+
+    formatted = _finalize_chat_answer(
+        "집주인의 실거주 계획을 확인해 보세요. (참고: [문서 1], [문서 2])",
+        sources,
+    )
+
+    assert "[문서 1]" not in formatted
+    assert "[문서 2]" not in formatted
+    assert "참고 문서" in formatted
+    assert "1. [법령] 주택임대차보호법 제6조의3" in formatted
+    assert "2. [법령] 주택임대차보호법 제6조의3 제5항" in formatted
 
 
 @pytest.mark.asyncio
@@ -117,6 +137,7 @@ async def test_repair_in_scope_rejection_for_lease_question():
 
     assert "임대차 계약 관련 질문만 답변할 수 있습니다" not in repaired
     assert "보증금" in repaired
+    assert "참고 문서" in repaired
 
 
 @pytest.mark.asyncio
@@ -145,6 +166,8 @@ async def test_repair_in_scope_rejection_formats_inline_numbered_list():
         deadline=time.perf_counter() + 5,
     )
 
-    assert "사항이 있습니다:\n\n1. **증명 책임**" in repaired
-    assert "\n2. **정당한 사유**" in repaired
+    assert "**" not in repaired
+    assert "사항이 있습니다:\n\n1. 증명 책임" in repaired
+    assert "\n2. 정당한 사유" in repaired
     assert "\n\n따라서 집주인의 실제 거주 계획" in repaired
+    assert "참고 문서" in repaired
